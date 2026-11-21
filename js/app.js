@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=6';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=6';
+import { CONFIG, getGasUrl } from './config.js?v=8';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=8';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,14 +8,14 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=6';
+} from './emojis.js?v=8';
 import {
   isNotifyEnabled,
   getNotifyPermission,
   toggleNotifications,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=6';
+} from './notify.js?v=8';
 import {
   parseImageContent,
   processImageFile,
@@ -24,11 +24,11 @@ import {
   cacheImageDataUrl,
   getCachedImageDataUrl,
   formatBytes,
-} from './images.js?v=6';
+} from './images.js?v=8';
 import {
   AVATAR_PRESETS,
   renderAvatarEl,
-} from './avatars.js?v=6';
+} from './avatars.js?v=8';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';

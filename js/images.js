@@ -1,7 +1,7 @@
 /**
  * 圖片壓縮、剪貼簿/檔案處理與 Google Drive 圖片三層備援載入模組
  */
-import { apiPost } from './api.js?v=6';
+import { apiPost } from './api.js?v=8';
 
 const MAX_DIMENSION = 1400;
 const AVATAR_SIZE = 256;
