@@ -34,6 +34,7 @@ const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
 const THEME_KEY = CONFIG.STORAGE_PREFIX + 'theme';
 const LAST_CHANNEL_KEY = CONFIG.STORAGE_PREFIX + 'last_channel';
+const PRIVACY_KEY = CONFIG.STORAGE_PREFIX + 'privacy_mirror';
 
 const AVATAR_PALETTE = [
   '#5B5FC7', '#2D7D9A', '#038387', '#498205', '#C239B3',
@@ -53,6 +54,8 @@ const state = {
   globalVersion: 0,
   lastRead: loadJson(READ_KEY, {}),
   unreadTitleCount: 0,
+  privacyMirror: false,
+  avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
   replyTarget: null,            // { id, senderName, type, preview, fileId }
   editTarget: null,             // { id, type, originalText }
   pendingImage: null,           // { dataUrl, base64, mime, width, height, sizeBytes, name }
@@ -106,6 +109,7 @@ const els = {
   ownerInviteCode: $('owner-invite-code'),
   copyInviteBtn: $('copy-invite-btn'),
   resetInviteBtn: $('reset-invite-btn'),
+  privacyToggleBtn: $('privacy-toggle-btn'),
   notifyToggleBtn: $('notify-toggle-btn'),
   syncStatus: $('sync-status'),
 
@@ -178,6 +182,7 @@ const els = {
   avatarUploadBtn: $('avatar-upload-btn'),
   avatarFileInput: $('avatar-file-input'),
   avatarPresetGrid: $('avatar-preset-grid'),
+  avatarSaveBtn: $('avatar-save-btn'),
 
   toastContainer: $('toast-container'),
 };
@@ -187,6 +192,7 @@ init();
 
 async function init() {
   initTheme();
+  initPrivacyMirror();
   renderNotifyBell();
   bindEvents();
   setUnauthorizedHandler((msg) => {
@@ -228,6 +234,31 @@ function applyTheme(theme) {
   els.themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 
+function initPrivacyMirror() {
+  applyPrivacyMirror(localStorage.getItem(PRIVACY_KEY) === '1');
+}
+
+function applyPrivacyMirror(enabled) {
+  state.privacyMirror = Boolean(enabled);
+  localStorage.setItem(PRIVACY_KEY, state.privacyMirror ? '1' : '0');
+  els.appView.classList.toggle('privacy-mirror', state.privacyMirror);
+  els.privacyToggleBtn.classList.toggle('active', state.privacyMirror);
+  els.privacyToggleBtn.title = state.privacyMirror
+    ? '防偷窺鏡像模式已開啟（滑鼠移到訊息上恢復正常，Alt+M 切換）'
+    : '開啟防偷窺鏡像模式（Alt+M）';
+}
+
+function togglePrivacyMirror() {
+  const next = !state.privacyMirror;
+  applyPrivacyMirror(next);
+  showToast(
+    next
+      ? '已開啟防偷窺鏡像模式（滑鼠移到訊息上即恢復閱讀）'
+      : '已關閉防偷窺鏡像模式',
+    next ? 'success' : 'info'
+  );
+}
+
 function renderNotifyBell() {
   const on = isNotifyEnabled();
   const perm = getNotifyPermission();
@@ -259,6 +290,9 @@ function bindEvents() {
   // 首次互動解鎖瀏覽器音效播放權限
   document.addEventListener('pointerdown', () => unlockAudio(), { once: true });
 
+  // 防偷窺鏡像開關
+  els.privacyToggleBtn.addEventListener('click', togglePrivacyMirror);
+
   // 鈴鐺通知開關
   els.notifyToggleBtn.addEventListener('click', async () => {
     const result = await toggleNotifications();
@@ -282,10 +316,11 @@ function bindEvents() {
   });
   els.logoutBtn.addEventListener('click', handleLogout);
 
-  // 頭像設定彈窗與上傳
+  // 頭像設定彈窗、預覽與儲存
   els.openAvatarModalBtn.addEventListener('click', openAvatarModal);
   els.avatarUploadBtn.addEventListener('click', () => els.avatarFileInput.click());
-  els.avatarFileInput.addEventListener('change', handleAvatarUpload);
+  els.avatarFileInput.addEventListener('change', handleAvatarFileSelect);
+  els.avatarSaveBtn.addEventListener('click', handleSaveAvatar);
 
   // 手機側邊欄
   els.mobileMenuBtn.addEventListener('click', () => toggleSidebar(true));
@@ -470,8 +505,13 @@ function bindEvents() {
     }
   });
 
-  // Esc 快捷鍵
+  // 全域快捷鍵：Alt+M 切換防偷窺鏡像、Esc 關閉彈窗/面板
   document.addEventListener('keydown', (e) => {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm' && state.token) {
+      e.preventDefault();
+      togglePrivacyMirror();
+      return;
+    }
     if (e.key !== 'Escape') return;
     if (!els.lightboxModal.classList.contains('hidden')) {
       closeLightbox();
@@ -632,22 +672,51 @@ function renderMeProfile() {
 function openAvatarModal() {
   if (!state.user) return;
   toggleSidebar(false);
+  state.avatarDraft = null;
+  els.avatarSaveBtn.disabled = true;
+  els.avatarSaveBtn.textContent = '儲存頭像';
+  renderAvatarModalPreview();
+  renderAvatarPresetGrid();
+  openModal(els.modalAvatar);
+}
+
+function renderAvatarModalPreview() {
+  if (!state.user) return;
+  const draft = state.avatarDraft;
+  if (draft && draft.mode === 'upload' && draft.processed) {
+    renderAvatarEl(els.avatarModalPreview, {
+      displayName: state.user.displayName,
+      previewDataUrl: draft.processed.dataUrl,
+    });
+    return;
+  }
+  if (draft && draft.mode === 'preset') {
+    const val = draft.presetId === 'initial' ? '' : `preset:${draft.presetId}`;
+    renderAvatarEl(els.avatarModalPreview, {
+      displayName: state.user.displayName,
+      avatarColor: state.user.avatarColor || colorFromId(state.user.id),
+      avatar: val,
+      token: state.token,
+    });
+    return;
+  }
   applyUserAvatar(els.avatarModalPreview, {
     userId: state.user.id,
     displayName: state.user.displayName,
     fallbackColor: state.user.avatarColor,
   });
-  renderAvatarPresetGrid();
-  openModal(els.modalAvatar);
 }
 
 function renderAvatarPresetGrid() {
   els.avatarPresetGrid.textContent = '';
-  const currentAvatar = String((state.user && state.user.avatar) || '');
+  const draft = state.avatarDraft;
+  const activeAvatar = draft
+    ? (draft.mode === 'preset' ? (draft.presetId === 'initial' ? '' : `preset:${draft.presetId}`) : '__upload__')
+    : String((state.user && state.user.avatar) || '');
 
   for (const preset of AVATAR_PRESETS) {
     const val = preset.id === 'initial' ? '' : `preset:${preset.id}`;
-    const isSelected = currentAvatar === val;
+    const isSelected = activeAvatar === val;
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -667,87 +736,59 @@ function renderAvatarPresetGrid() {
 
     btn.appendChild(circle);
     btn.appendChild(label);
-    btn.addEventListener('click', () => handleSelectAvatarPreset(preset.id));
+    btn.addEventListener('click', () => selectAvatarPresetDraft(preset.id));
     els.avatarPresetGrid.appendChild(btn);
   }
 }
 
-async function handleSelectAvatarPreset(presetId) {
+function selectAvatarPresetDraft(presetId) {
   if (!state.user) return;
   const nextVal = presetId === 'initial' ? '' : `preset:${presetId}`;
-  const prevVal = state.user.avatar || '';
-  if (nextVal === prevVal) {
-    closeModal(els.modalAvatar);
-    return;
-  }
-
-  // 樂觀更新
-  state.user.avatar = nextVal;
-  state.userProfiles[state.user.id] = {
-    displayName: state.user.displayName,
-    avatarColor: state.user.avatarColor,
-    avatar: nextVal,
-  };
-  saveSession();
-  renderMeProfile();
-  applyUserAvatar(els.avatarModalPreview, {
-    userId: state.user.id,
-    displayName: state.user.displayName,
-    fallbackColor: state.user.avatarColor,
-  });
+  const currentVal = String(state.user.avatar || '');
+  state.avatarDraft = nextVal === currentVal ? null : { mode: 'preset', presetId };
+  els.avatarSaveBtn.disabled = !state.avatarDraft;
+  renderAvatarModalPreview();
   renderAvatarPresetGrid();
-  renderMessages();
-
-  try {
-    const res = await apiPost('updateAvatar', { mode: 'preset', preset: presetId }, { token: state.token });
-    if (res.user) {
-      state.user = res.user;
-      saveSession();
-    }
-    if (res.userProfiles) state.userProfiles = res.userProfiles;
-    renderMeProfile();
-    renderMessages();
-    showToast('頭像已更新！', 'success');
-    closeModal(els.modalAvatar);
-  } catch (err) {
-    state.user.avatar = prevVal;
-    if (state.userProfiles[state.user.id]) state.userProfiles[state.user.id].avatar = prevVal;
-    saveSession();
-    renderMeProfile();
-    renderAvatarPresetGrid();
-    renderMessages();
-    showToast('頭像更新失敗：' + err.message, 'error');
-  }
 }
 
-async function handleAvatarUpload() {
+async function handleAvatarFileSelect() {
   const file = els.avatarFileInput.files && els.avatarFileInput.files[0];
   els.avatarFileInput.value = '';
   if (!file || !state.user) return;
 
-  setBtnLoading(els.avatarUploadBtn, true, '上傳中…');
   try {
     const processed = await processAvatarFile(file);
+    state.avatarDraft = { mode: 'upload', processed };
+    els.avatarSaveBtn.disabled = false;
+    renderAvatarModalPreview();
+    renderAvatarPresetGrid();
+  } catch (err) {
+    showToast(err.message || '圖片處理失敗', 'error');
+  }
+}
 
-    // 預覽區先即時顯示
-    renderAvatarEl(els.avatarModalPreview, {
-      displayName: state.user.displayName,
-      previewDataUrl: processed.dataUrl,
-    });
+async function handleSaveAvatar() {
+  if (!state.user || !state.avatarDraft) return;
+  const draft = state.avatarDraft;
 
-    const res = await apiPost(
-      'updateAvatar',
-      {
-        mode: 'upload',
-        imageData: processed.base64,
-        imageMime: processed.mime,
-      },
-      { token: state.token }
-    );
+  setBtnLoading(els.avatarSaveBtn, true, '儲存中…');
+  try {
+    const payload = draft.mode === 'upload'
+      ? {
+          mode: 'upload',
+          imageData: draft.processed.base64,
+          imageMime: draft.processed.mime,
+        }
+      : {
+          mode: 'preset',
+          preset: draft.presetId,
+        };
 
+    const res = await apiPost('updateAvatar', payload, { token: state.token });
     const avatarVal = String(res.avatar || (res.user && res.user.avatar) || '');
-    if (avatarVal.startsWith('drive:')) {
-      cacheImageDataUrl(avatarVal.slice(6), processed.dataUrl);
+
+    if (draft.mode === 'upload' && avatarVal.startsWith('drive:')) {
+      cacheImageDataUrl(avatarVal.slice(6), draft.processed.dataUrl);
     }
 
     if (res.user) {
@@ -765,20 +806,17 @@ async function handleAvatarUpload() {
       };
     }
 
+    state.avatarDraft = null;
     saveSession();
     renderMeProfile();
     renderMessages();
-    showToast('自訂頭像已上傳並套用！', 'success');
+    showToast('頭像已儲存！', 'success');
     closeModal(els.modalAvatar);
   } catch (err) {
-    applyUserAvatar(els.avatarModalPreview, {
-      userId: state.user.id,
-      displayName: state.user.displayName,
-      fallbackColor: state.user.avatarColor,
-    });
-    showToast('頭像上傳失敗：' + err.message, 'error');
+    showToast('頭像儲存失敗：' + err.message, 'error');
   } finally {
-    setBtnLoading(els.avatarUploadBtn, false, '上傳自己的頭像');
+    setBtnLoading(els.avatarSaveBtn, false, '儲存頭像');
+    els.avatarSaveBtn.disabled = !state.avatarDraft;
   }
 }
 
@@ -1171,7 +1209,9 @@ async function syncNow() {
         const ch = getCurrentChannel();
         const chName = ch ? ch.name : 'Messenger';
         let body = '';
-        if (last.type === 'sticker') {
+        if (state.privacyMirror) {
+          body = '收到一則新訊息';
+        } else if (last.type === 'sticker') {
           body = `[貼圖] ${getEmojiById(last.content).label}`;
         } else if (last.type === 'image') {
           const imgMeta = parseImageContent(last.content);

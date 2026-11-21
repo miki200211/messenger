@@ -1716,6 +1716,38 @@ button {
   word-break: break-word;
 }
 
+/* ==================== 防偷窺鏡像模式 ==================== */
+.app-view.privacy-mirror .messages-list .msg-text,
+.app-view.privacy-mirror .messages-list .msg-image-caption,
+.app-view.privacy-mirror .messages-list .msg-quote-text,
+.app-view.privacy-mirror .messages-list .msg-sender {
+  transform: scaleX(-1);
+  transition: transform 0.16s ease;
+}
+
+.app-view.privacy-mirror .messages-list .msg-image {
+  filter: blur(10px);
+  transform: scaleX(-1);
+  transition: filter 0.18s ease, transform 0.18s ease;
+}
+
+.app-view.privacy-mirror .messages-list .msg-row:hover .msg-text,
+.app-view.privacy-mirror .messages-list .msg-row:hover .msg-image-caption,
+.app-view.privacy-mirror .messages-list .msg-row:hover .msg-quote-text,
+.app-view.privacy-mirror .messages-list .msg-row:hover .msg-sender,
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-text,
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-image-caption,
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-quote-text,
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-sender {
+  transform: scaleX(1);
+}
+
+.app-view.privacy-mirror .messages-list .msg-row:hover .msg-image,
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-image {
+  filter: none;
+  transform: scaleX(1);
+}
+
 /* ==================== 捲軸美化 ==================== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

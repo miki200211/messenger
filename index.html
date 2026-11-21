@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=6" />
+  <link rel="stylesheet" href="css/style.css?v=9" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -129,6 +129,15 @@
             <button id="copy-invite-btn" class="mini-btn" type="button" title="複製邀請碼">複製</button>
             <button id="reset-invite-btn" class="mini-btn" type="button" title="重新產生邀請碼">重設</button>
           </div>
+          <!-- 防偷窺鏡像開關 -->
+          <button id="privacy-toggle-btn" class="icon-btn notify-btn" type="button" title="防偷窺鏡像模式（Alt+M）" aria-label="防偷窺鏡像模式">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </svg>
+            <span class="notify-dot" aria-hidden="true"></span>
+          </button>
           <!-- 鈴鐺：瀏覽器跳出通知與提示音開關 -->
           <button id="notify-toggle-btn" class="icon-btn notify-btn" type="button" title="開啟瀏覽器訊息通知" aria-label="訊息通知開關">
             <svg class="bell-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -329,13 +338,17 @@
         <div class="avatar-modal-top">
           <div id="avatar-modal-preview" class="avatar avatar-lg"></div>
           <div class="avatar-upload-col">
-            <button id="avatar-upload-btn" class="btn btn-primary btn-sm" type="button">上傳自己的頭像</button>
+            <button id="avatar-upload-btn" class="btn btn-secondary btn-sm" type="button">選擇圖片</button>
             <input id="avatar-file-input" type="file" accept="image/*" class="hidden" />
-            <p class="hint-text">自動置中裁切為圓形，支援 JPG / PNG / WebP / GIF</p>
+            <p class="hint-text">預覽滿意後再按下方「儲存頭像」（支援 JPG / PNG / WebP / GIF）</p>
           </div>
         </div>
         <div class="info-label" style="margin-top: 14px;">或選擇預設頭像</div>
         <div id="avatar-preset-grid" class="avatar-preset-grid"></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close" type="button">取消</button>
+          <button id="avatar-save-btn" class="btn btn-primary" type="button" disabled>儲存頭像</button>
+        </div>
       </div>
     </div>
   </div>
@@ -353,6 +366,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=8"></script>
+  <script type="module" src="js/app.js?v=9"></script>
 </body>
 </html>
