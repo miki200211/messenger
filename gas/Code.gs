@@ -103,13 +103,17 @@ const ALLOWED_AVATAR_PRESETS = {
   monkey: true,
 };
 
+const SCHEMA_VERSION = 'v4';
+let _reqSs = null;
+let _reqImgFolder = null;
+
 // ============================================================================
 // 公開入口：初始化 / 健康檢查 / API 派發
 // ============================================================================
 
 function setupDatabase() {
-  const ss = ensureSpreadsheet_();
-  const imgFolder = ensureImagesFolder_();
+  const ss = ensureSpreadsheet_(true);
+  const imgFolder = ensureImagesFolder_(true);
   ensureServerPepper_();
   Logger.log('資料庫就緒！試算表網址：' + ss.getUrl());
   Logger.log('圖片資料夾 ID：' + imgFolder.getId());
@@ -479,7 +483,12 @@ function handleCreateChannel_(body) {
       now,
     ]);
 
-    cacheChannelMembers_(channelId, members);
+    cacheChannelMeta_(channelId, {
+      rowNum: rows.length + 2,
+      name: name,
+      ownerId: auth.user.id,
+      members: members,
+    });
     setChannelVersion_(channelId, now);
 
     return {
@@ -537,10 +546,9 @@ function handleJoinChannel_(body) {
           memberNamesList.push(auth.user.displayName);
         }
         const rowNum = i + 2;
-        sheet.getRange(rowNum, 6).setValue(JSON.stringify(members));
-        sheet.getRange(rowNum, 7).setValue(toSheetText_(memberNamesList.join(', ')));
+        sheet.getRange(rowNum, 6, 1, 2).setValues([[JSON.stringify(members), toSheetText_(memberNamesList.join(', '))]]);
         sheet.getRange(rowNum, 10).setValue(now);
-        cacheChannelMembers_(channelId, members);
+        cacheChannelMeta_(channelId, { rowNum: rowNum, name: String(row[1]), ownerId: String(row[3]), members: members });
       }
 
       const updatedRow = row.slice();
@@ -668,11 +676,10 @@ function handleUpdateChannel_(body) {
     const now = nextVersion_('global_ver');
     const rowNum = targetIdx + 2;
     sheet.getRange(rowNum, 2).setValue(toSheetText_(newName));
-    sheet.getRange(rowNum, 6).setValue(JSON.stringify(nextMembers));
-    sheet.getRange(rowNum, 7).setValue(toSheetText_(nextMemberNames.join(', ')));
+    sheet.getRange(rowNum, 6, 1, 2).setValues([[JSON.stringify(nextMembers), toSheetText_(nextMemberNames.join(', '))]]);
     sheet.getRange(rowNum, 10).setValue(now);
 
-    cacheChannelMembers_(channelId, nextMembers);
+    cacheChannelMeta_(channelId, { rowNum: rowNum, name: newName, ownerId: ownerId, members: nextMembers });
 
     const updatedRow = row.slice();
     updatedRow[1] = newName;
@@ -831,8 +838,8 @@ function handleSendMessage_(body) {
     const width = Math.max(0, Math.min(8000, Number(body.width || 0) || 0));
     const height = Math.max(0, Math.min(8000, Number(body.height || 0) || 0));
 
-    // 先檢查成員資格再寫入 Drive 圖片，避免非成員亂塞檔案
-    const preCheck = findChannelForMember_(ensureSpreadsheet_(), channelId, auth.user.id);
+    // 先透過快速快取檢查成員資格再寫入 Drive 圖片，避免非成員亂塞檔案且省下讀表時間
+    const preCheck = findChannelForMemberFast_(channelId, auth.user.id);
     if (!preCheck.ok) return preCheck;
 
     const bytes = Utilities.base64Decode(b64);
@@ -859,45 +866,42 @@ function handleSendMessage_(body) {
   }
 
   return withLock_(function () {
-    const ss = ensureSpreadsheet_();
-    const chInfo = findChannelForMember_(ss, channelId, auth.user.id);
+    const chInfo = findChannelForMemberFast_(channelId, auth.user.id);
     if (!chInfo.ok) return chInfo;
 
+    const ss = ensureSpreadsheet_();
     const msgSheet = ss.getSheetByName(SHEETS.MESSAGES);
     let replyPreview = null;
 
     if (replyToId) {
-      const existingRows = getDataRows_(msgSheet);
-      for (let i = existingRows.length - 1; i >= 0; i--) {
-        const r = existingRows[i];
-        if (String(r[0]) === replyToId && String(r[1]) === channelId) {
-          const deleted = isTruthy_(r[13]);
-          const origType = String(r[5] || 'text');
-          const origContent = String(r[6] || '');
-          let previewText = '';
-          let previewFileId = '';
+      const found = findMessageRowById_(msgSheet, replyToId);
+      if (found && String(found.row[1]) === channelId) {
+        const r = found.row;
+        const deleted = isTruthy_(r[13]);
+        const origType = String(r[5] || 'text');
+        const origContent = String(r[6] || '');
+        let previewText = '';
+        let previewFileId = '';
 
-          if (deleted) {
-            previewText = '此訊息已收回';
-          } else if (origType === 'sticker') {
-            previewText = origContent;
-          } else if (origType === 'image') {
-            const imgMeta = safeJsonParse_(origContent, {});
-            previewFileId = String(imgMeta.fileId || '');
-            previewText = imgMeta.caption ? '[圖片] ' + String(imgMeta.caption).slice(0, 60) : '[圖片]';
-          } else {
-            previewText = origContent.slice(0, 80);
-          }
-
-          replyPreview = {
-            id: replyToId,
-            senderName: String(r[4] || ''),
-            type: deleted ? 'deleted' : origType,
-            preview: previewText,
-            fileId: previewFileId,
-          };
-          break;
+        if (deleted) {
+          previewText = '此訊息已收回';
+        } else if (origType === 'sticker') {
+          previewText = origContent;
+        } else if (origType === 'image') {
+          const imgMeta = safeJsonParse_(origContent, {});
+          previewFileId = String(imgMeta.fileId || '');
+          previewText = imgMeta.caption ? '[圖片] ' + String(imgMeta.caption).slice(0, 60) : '[圖片]';
+        } else {
+          previewText = origContent.slice(0, 80);
         }
+
+        replyPreview = {
+          id: replyToId,
+          senderName: String(r[4] || ''),
+          type: deleted ? 'deleted' : origType,
+          preview: previewText,
+          fileId: previewFileId,
+        };
       }
     }
 
@@ -924,8 +928,7 @@ function handleSendMessage_(body) {
     ]);
 
     const chSheet = ss.getSheetByName(SHEETS.CHANNELS);
-    chSheet.getRange(chInfo.rowNum, 9).setValue(now);
-    chSheet.getRange(chInfo.rowNum, 10).setValue(now);
+    chSheet.getRange(chInfo.rowNum, 9, 1, 2).setValues([[now, now]]);
 
     setChannelVersion_(channelId, now);
 
@@ -965,61 +968,57 @@ function handleEditMessage_(body) {
   }
 
   return withLock_(function () {
-    const ss = ensureSpreadsheet_();
-    const chInfo = findChannelForMember_(ss, channelId, auth.user.id);
+    const chInfo = findChannelForMemberFast_(channelId, auth.user.id);
     if (!chInfo.ok) return chInfo;
 
+    const ss = ensureSpreadsheet_();
     const msgSheet = ss.getSheetByName(SHEETS.MESSAGES);
-    const rows = getDataRows_(msgSheet);
-
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      if (String(row[0]) !== msgId || String(row[1]) !== channelId) continue;
-
-      if (String(row[3]) !== auth.user.id) {
-        return { ok: false, error: '只能編輯自己發送的訊息' };
-      }
-      if (isTruthy_(row[13])) {
-        return { ok: false, error: '已收回的訊息無法編輯' };
-      }
-
-      const type = String(row[5] || 'text');
-      let updatedContent = '';
-
-      if (type === 'text') {
-        if (!newText) return { ok: false, error: '訊息內容不可為空' };
-        if (newText.length > 2000) return { ok: false, error: '單則訊息最多 2000 字元' };
-        updatedContent = newText;
-      } else if (type === 'image') {
-        if (newText.length > 500) return { ok: false, error: '圖片說明最多 500 字元' };
-        const imgObj = safeJsonParse_(row[6], {});
-        imgObj.caption = newText;
-        updatedContent = JSON.stringify(imgObj);
-      } else {
-        return { ok: false, error: '此類型的訊息無法編輯' };
-      }
-
-      const now = nextVersion_('global_ver');
-      const rowNum = i + 2;
-      msgSheet.getRange(rowNum, 7).setValue(type === 'image' ? updatedContent : toSheetText_(updatedContent));
-      msgSheet.getRange(rowNum, 13).setValue(now);
-      msgSheet.getRange(rowNum, 15).setValue(now);
-
-      setChannelVersion_(channelId, now);
-
-      const updatedRow = row.slice();
-      updatedRow[6] = updatedContent;
-      updatedRow[12] = now;
-      updatedRow[14] = now;
-
-      return {
-        ok: true,
-        message: formatMessageRow_(updatedRow),
-        version: now,
-      };
+    const found = findMessageRowById_(msgSheet, msgId);
+    if (!found || String(found.row[1]) !== channelId) {
+      return { ok: false, error: '找不到該訊息' };
     }
 
-    return { ok: false, error: '找不到該訊息' };
+    const row = found.row;
+    const rowNum = found.rowNum;
+    if (String(row[3]) !== auth.user.id) {
+      return { ok: false, error: '只能編輯自己發送的訊息' };
+    }
+    if (isTruthy_(row[13])) {
+      return { ok: false, error: '已收回的訊息無法編輯' };
+    }
+
+    const type = String(row[5] || 'text');
+    let updatedContent = '';
+
+    if (type === 'text') {
+      if (!newText) return { ok: false, error: '訊息內容不可為空' };
+      if (newText.length > 2000) return { ok: false, error: '單則訊息最多 2000 字元' };
+      updatedContent = newText;
+    } else if (type === 'image') {
+      if (newText.length > 500) return { ok: false, error: '圖片說明最多 500 字元' };
+      const imgObj = safeJsonParse_(row[6], {});
+      imgObj.caption = newText;
+      updatedContent = JSON.stringify(imgObj);
+    } else {
+      return { ok: false, error: '此類型的訊息無法編輯' };
+    }
+
+    const now = nextVersion_('global_ver');
+    msgSheet.getRange(rowNum, 7).setValue(type === 'image' ? updatedContent : toSheetText_(updatedContent));
+    msgSheet.getRange(rowNum, 13, 1, 3).setValues([[now, false, now]]);
+
+    setChannelVersion_(channelId, now);
+
+    const updatedRow = row.slice();
+    updatedRow[6] = updatedContent;
+    updatedRow[12] = now;
+    updatedRow[14] = now;
+
+    return {
+      ok: true,
+      message: formatMessageRow_(updatedRow),
+      version: now,
+    };
   });
 }
 
@@ -1030,6 +1029,12 @@ function handleGetImage_(body) {
   const fileId = String(body.fileId || '').trim();
   if (!/^[a-zA-Z0-9_-]{10,80}$/.test(fileId)) {
     return { ok: false, error: '無效的圖片 ID' };
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cachedDataUrl = cache.get('img_' + fileId);
+  if (cachedDataUrl) {
+    return { ok: true, dataUrl: cachedDataUrl };
   }
 
   const imgFolder = ensureImagesFolder_();
@@ -1054,10 +1059,17 @@ function handleGetImage_(body) {
 
   const blob = file.getBlob();
   const mime = blob.getContentType() || 'image/webp';
-  const b64 = Utilities.base64Encode(blob.getBytes());
+  const dataUrl = 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes());
+  if (dataUrl.length < 95000) {
+    try {
+      cache.put('img_' + fileId, dataUrl, 21600);
+    } catch (e) {
+      // ignore cache size error
+    }
+  }
   return {
     ok: true,
-    dataUrl: 'data:' + mime + ';base64,' + b64,
+    dataUrl: dataUrl,
   };
 }
 
@@ -1074,56 +1086,58 @@ function handleToggleReaction_(body) {
   }
 
   return withLock_(function () {
-    const ss = ensureSpreadsheet_();
-    const chInfo = findChannelForMember_(ss, channelId, auth.user.id);
+    const chInfo = findChannelForMemberFast_(channelId, auth.user.id);
     if (!chInfo.ok) return chInfo;
 
+    const ss = ensureSpreadsheet_();
     const msgSheet = ss.getSheetByName(SHEETS.MESSAGES);
-    const rows = getDataRows_(msgSheet);
-
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      if (String(row[0]) !== msgId || String(row[1]) !== channelId) continue;
-
-      if (isTruthy_(row[13])) {
-        return { ok: false, error: '無法對已收回的訊息按表情' };
-      }
-
-      const reactions = safeJsonParse_(row[9], {});
-      const list = Array.isArray(reactions[emojiId]) ? reactions[emojiId] : [];
-      const existsIdx = list.findIndex(function (item) {
-        return item && item.id === auth.user.id;
-      });
-
-      if (existsIdx >= 0) {
-        list.splice(existsIdx, 1);
-      } else {
-        list.push({ id: auth.user.id, name: auth.user.displayName });
-      }
-
-      if (list.length === 0) {
-        delete reactions[emojiId];
-      } else {
-        reactions[emojiId] = list;
-      }
-
-      const now = nextVersion_('global_ver');
-      const rowNum = i + 2;
-      msgSheet.getRange(rowNum, 10).setValue(JSON.stringify(reactions));
-      msgSheet.getRange(rowNum, 13).setValue(now);
-
-      setChannelVersion_(channelId, now);
-
-      return {
-        ok: true,
-        msgId: msgId,
-        reactions: reactions,
-        updatedAt: now,
-        version: now,
-      };
+    const found = findMessageRowById_(msgSheet, msgId);
+    if (!found || String(found.row[1]) !== channelId) {
+      return { ok: false, error: '找不到該訊息' };
     }
 
-    return { ok: false, error: '找不到該訊息' };
+    const row = found.row;
+    const rowNum = found.rowNum;
+    if (isTruthy_(row[13])) {
+      return { ok: false, error: '無法對已收回的訊息按表情' };
+    }
+
+    const reactions = safeJsonParse_(row[9], {});
+    const list = Array.isArray(reactions[emojiId]) ? reactions[emojiId] : [];
+    const existsIdx = list.findIndex(function (item) {
+      return item && item.id === auth.user.id;
+    });
+
+    if (existsIdx >= 0) {
+      list.splice(existsIdx, 1);
+    } else {
+      list.push({ id: auth.user.id, name: auth.user.displayName });
+    }
+
+    if (list.length === 0) {
+      delete reactions[emojiId];
+    } else {
+      reactions[emojiId] = list;
+    }
+
+    const now = nextVersion_('global_ver');
+    // 單一 4 欄批次寫入 (col 10..13: reactions_json, created_at, created_at_text, updated_at)
+    msgSheet.getRange(rowNum, 10, 1, 4).setValues([[
+      JSON.stringify(reactions),
+      row[10],
+      toSheetText_(row[11]),
+      now,
+    ]]);
+
+    setChannelVersion_(channelId, now);
+
+    return {
+      ok: true,
+      msgId: msgId,
+      reactions: reactions,
+      updatedAt: now,
+      version: now,
+    };
   });
 }
 
@@ -1136,36 +1150,37 @@ function handleDeleteMessage_(body) {
   if (!channelId || !msgId) return { ok: false, error: '缺少必要參數' };
 
   return withLock_(function () {
-    const ss = ensureSpreadsheet_();
-    const chInfo = findChannelForMember_(ss, channelId, auth.user.id);
+    const chInfo = findChannelForMemberFast_(channelId, auth.user.id);
     if (!chInfo.ok) return chInfo;
 
+    const ss = ensureSpreadsheet_();
     const msgSheet = ss.getSheetByName(SHEETS.MESSAGES);
-    const rows = getDataRows_(msgSheet);
-
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      if (String(row[0]) !== msgId || String(row[1]) !== channelId) continue;
-
-      const isSender = String(row[3]) === auth.user.id;
-      const isOwner = chInfo.ownerId === auth.user.id;
-      if (!isSender && !isOwner) {
-        return { ok: false, error: '只能收回自己的訊息' };
-      }
-
-      const now = nextVersion_('global_ver');
-      const rowNum = i + 2;
-      msgSheet.getRange(rowNum, 7).setValue('');
-      msgSheet.getRange(rowNum, 10).setValue('{}');
-      msgSheet.getRange(rowNum, 13).setValue(now);
-      msgSheet.getRange(rowNum, 14).setValue(true);
-
-      setChannelVersion_(channelId, now);
-
-      return { ok: true, msgId: msgId, updatedAt: now, version: now };
+    const found = findMessageRowById_(msgSheet, msgId);
+    if (!found || String(found.row[1]) !== channelId) {
+      return { ok: false, error: '找不到該訊息' };
     }
 
-    return { ok: false, error: '找不到該訊息' };
+    const row = found.row;
+    const rowNum = found.rowNum;
+    const isSender = String(row[3]) === auth.user.id;
+    const isOwner = chInfo.ownerId === auth.user.id;
+    if (!isSender && !isOwner) {
+      return { ok: false, error: '只能收回自己的訊息' };
+    }
+
+    const now = nextVersion_('global_ver');
+    msgSheet.getRange(rowNum, 7).setValue('');
+    msgSheet.getRange(rowNum, 10, 1, 5).setValues([[
+      '{}',
+      row[10],
+      toSheetText_(row[11]),
+      now,
+      true,
+    ]]);
+
+    setChannelVersion_(channelId, now);
+
+    return { ok: true, msgId: msgId, updatedAt: now, version: now };
   });
 }
 
@@ -1188,19 +1203,35 @@ function getConfig_() {
   };
 }
 
-function ensureImagesFolder_() {
+function ensureImagesFolder_(forceVerify) {
+  if (_reqImgFolder && !forceVerify) return _reqImgFolder;
+
+  const cache = CacheService.getScriptCache();
   const props = PropertiesService.getScriptProperties();
-  const cfg = getConfig_();
-  const savedId = props.getProperty('IMAGES_FOLDER_ID');
-  if (savedId) {
+  const savedId = cache.get('img_folder_id') || props.getProperty('IMAGES_FOLDER_ID');
+
+  if (savedId && !forceVerify) {
     try {
-      const existing = DriveApp.getFolderById(savedId);
-      if (!existing.isTrashed()) return existing;
+      _reqImgFolder = DriveApp.getFolderById(savedId);
+      cache.put('img_folder_id', savedId, 21600);
+      return _reqImgFolder;
     } catch (e) {
       // fallback to lookup/create
     }
+  } else if (savedId && forceVerify) {
+    try {
+      const existing = DriveApp.getFolderById(savedId);
+      if (!existing.isTrashed()) {
+        _reqImgFolder = existing;
+        cache.put('img_folder_id', savedId, 21600);
+        return existing;
+      }
+    } catch (e) {
+      // fallback
+    }
   }
 
+  const cfg = getConfig_();
   if (!cfg.DB_FOLDER_ID || cfg.DB_FOLDER_ID === 'YOUR_GOOGLE_DRIVE_FOLDER_ID') {
     throw new Error('尚未設定 DB_FOLDER_ID，請先設定你的 Google Drive 資料夾 ID');
   }
@@ -1217,28 +1248,32 @@ function ensureImagesFolder_() {
   if (!target) {
     target = rootFolder.createFolder(cfg.IMAGES_FOLDER_NAME);
   }
-  props.setProperty('IMAGES_FOLDER_ID', target.getId());
+  const tid = target.getId();
+  props.setProperty('IMAGES_FOLDER_ID', tid);
+  cache.put('img_folder_id', tid, 21600);
+  _reqImgFolder = target;
   return target;
 }
 
-function ensureSpreadsheet_() {
+function ensureSpreadsheet_(forceCheckSchema) {
+  if (_reqSs && !forceCheckSchema) return _reqSs;
+
+  const cache = CacheService.getScriptCache();
   const props = PropertiesService.getScriptProperties();
-  const cfg = getConfig_();
   let ss = null;
 
-  const savedId = props.getProperty('SPREADSHEET_ID');
+  const savedId = cache.get('ss_id') || props.getProperty('SPREADSHEET_ID');
   if (savedId) {
     try {
-      const file = DriveApp.getFileById(savedId);
-      if (!file.isTrashed()) {
-        ss = SpreadsheetApp.openById(savedId);
-      }
+      ss = SpreadsheetApp.openById(savedId);
+      cache.put('ss_id', savedId, 21600);
     } catch (e) {
       ss = null;
     }
   }
 
   if (!ss) {
+    const cfg = getConfig_();
     if (!cfg.DB_FOLDER_ID || cfg.DB_FOLDER_ID === 'YOUR_GOOGLE_DRIVE_FOLDER_ID') {
       throw new Error('尚未設定 DB_FOLDER_ID，請先設定你的 Google Drive 資料夾 ID');
     }
@@ -1257,10 +1292,24 @@ function ensureSpreadsheet_() {
       DriveApp.getFileById(ss.getId()).moveTo(folder);
     }
 
-    props.setProperty('SPREADSHEET_ID', ss.getId());
+    const ssid = ss.getId();
+    props.setProperty('SPREADSHEET_ID', ssid);
+    cache.put('ss_id', ssid, 21600);
+    forceCheckSchema = true;
   }
 
-  ensureSheetStructure_(ss);
+  // 僅在首次建立或版本升級時檢查表頭，省去每次請求 500ms+ 的試算表結構讀寫開銷
+  const cachedVer = cache.get('schema_ver');
+  if (forceCheckSchema || cachedVer !== SCHEMA_VERSION) {
+    const propVer = props.getProperty('SCHEMA_VERSION');
+    if (forceCheckSchema || propVer !== SCHEMA_VERSION) {
+      ensureSheetStructure_(ss);
+      props.setProperty('SCHEMA_VERSION', SCHEMA_VERSION);
+    }
+    cache.put('schema_ver', SCHEMA_VERSION, 21600);
+  }
+
+  _reqSs = ss;
   return ss;
 }
 
@@ -1375,7 +1424,12 @@ function listUserChannels_(ss, userId) {
     const row = rows[i];
     const channelId = String(row[0]);
     const members = safeJsonParse_(row[5], []);
-    cacheChannelMembers_(channelId, members);
+    cacheChannelMeta_(channelId, {
+      rowNum: i + 2,
+      name: String(row[1]),
+      ownerId: String(row[3]),
+      members: members,
+    });
 
     if (members.indexOf(userId) !== -1) {
       result.push(formatChannelRow_(row, userId));
@@ -1388,6 +1442,27 @@ function listUserChannels_(ss, userId) {
   return result;
 }
 
+function findChannelForMemberFast_(channelId, userId) {
+  const raw = CacheService.getScriptCache().get('ch_meta_' + channelId);
+  if (raw) {
+    const meta = safeJsonParse_(raw, null);
+    if (meta && Array.isArray(meta.members) && meta.rowNum) {
+      if (meta.members.indexOf(userId) === -1) {
+        return { ok: false, error: '你不是此頻道的成員' };
+      }
+      return {
+        ok: true,
+        rowNum: meta.rowNum,
+        id: channelId,
+        name: meta.name,
+        ownerId: meta.ownerId,
+        members: meta.members,
+      };
+    }
+  }
+  return findChannelForMember_(ensureSpreadsheet_(), channelId, userId);
+}
+
 function findChannelForMember_(ss, channelId, userId) {
   const sheet = ss.getSheetByName(SHEETS.CHANNELS);
   const rows = getDataRows_(sheet);
@@ -1396,13 +1471,19 @@ function findChannelForMember_(ss, channelId, userId) {
     if (String(row[0]) !== channelId) continue;
 
     const members = safeJsonParse_(row[5], []);
-    cacheChannelMembers_(channelId, members);
+    const rowNum = i + 2;
+    cacheChannelMeta_(channelId, {
+      rowNum: rowNum,
+      name: String(row[1]),
+      ownerId: String(row[3]),
+      members: members,
+    });
     if (members.indexOf(userId) === -1) {
       return { ok: false, error: '你不是此頻道的成員' };
     }
     return {
       ok: true,
-      rowNum: i + 2,
+      rowNum: rowNum,
       id: channelId,
       name: String(row[1]),
       ownerId: String(row[3]),
@@ -1410,6 +1491,31 @@ function findChannelForMember_(ss, channelId, userId) {
     };
   }
   return { ok: false, error: '找不到該頻道' };
+}
+
+/**
+ * 使用試算表原生 TextFinder 單欄快速定位 msg_id，只讀取命中的單一列（比全表掃描快 5~10 倍）
+ */
+function findMessageRowById_(msgSheet, msgId) {
+  const lastRow = msgSheet.getLastRow();
+  if (lastRow <= 1) return null;
+  const match = msgSheet
+    .getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(msgId)
+    .matchEntireCell(true)
+    .findNext();
+  if (!match) return null;
+  const rowNum = match.getRow();
+  const row = msgSheet.getRange(rowNum, 1, 1, msgSheet.getLastColumn()).getValues()[0];
+  return { rowNum: rowNum, row: row };
+}
+
+function cacheChannelMeta_(channelId, meta) {
+  const cache = CacheService.getScriptCache();
+  cache.put('ch_meta_' + channelId, JSON.stringify(meta), 600);
+  if (meta && Array.isArray(meta.members)) {
+    cache.put('ch_mem_' + channelId, JSON.stringify(meta.members), 600);
+  }
 }
 
 function formatChannelRow_(row, viewerUserId) {
@@ -1477,7 +1583,7 @@ function getDataRows_(sheet) {
 
 function cacheUserToken_(token, user, expireAt) {
   const cache = CacheService.getScriptCache();
-  cache.put('tok_' + token, JSON.stringify({ user: user, expireAt: expireAt }), 600);
+  cache.put('tok_' + token, JSON.stringify({ user: user, expireAt: expireAt }), 1800);
 }
 
 function getCachedUserByToken_(token) {
@@ -1496,7 +1602,7 @@ function clearTokenCache_(token) {
 }
 
 function cacheChannelMembers_(channelId, members) {
-  CacheService.getScriptCache().put('ch_mem_' + channelId, JSON.stringify(members), 600);
+  CacheService.getScriptCache().put('ch_mem_' + channelId, JSON.stringify(members), 1800);
 }
 
 function isCachedMember_(channelId, userId) {
@@ -1511,12 +1617,12 @@ function nextVersion_(key) {
   const prev = Number(cache.get(key) || 0);
   const now = Date.now();
   const next = now > prev ? now : prev + 1;
-  cache.put(key, String(next), 180);
+  cache.put(key, String(next), 300);
   return next;
 }
 
 function setChannelVersion_(channelId, ver) {
-  CacheService.getScriptCache().put('ch_ver_' + channelId, String(ver), 180);
+  CacheService.getScriptCache().put('ch_ver_' + channelId, String(ver), 300);
 }
 
 function getGlobalVersion_() {
@@ -1524,7 +1630,7 @@ function getGlobalVersion_() {
   let v = Number(cache.get('global_ver') || 0);
   if (!v) {
     v = Date.now();
-    cache.put('global_ver', String(v), 180);
+    cache.put('global_ver', String(v), 300);
   }
   return v;
 }

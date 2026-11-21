@@ -1,9 +1,9 @@
 /**
  * 圖片壓縮、剪貼簿/檔案處理與 Google Drive 圖片三層備援載入模組
  */
-import { apiPost } from './api.js?v=12';
+import { apiPost } from './api.js?v=13';
 
-const MAX_DIMENSION = 1400;
+const MAX_DIMENSION = 1200;
 const AVATAR_SIZE = 256;
 const MAX_GIF_BYTES = 2.5 * 1024 * 1024;
 const MAX_AVATAR_GIF_BYTES = 900 * 1024;
@@ -70,10 +70,10 @@ export async function processImageFile(file) {
     };
   }
 
-  const objUrl = URL.createObjectURL(file);
+  const decoded = await decodeImageSource(file);
   try {
-    const img = await loadHtmlImage(objUrl);
-    let { naturalWidth: w, naturalHeight: h } = img;
+    let w = decoded.width;
+    let h = decoded.height;
     if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
       const ratio = Math.min(MAX_DIMENSION / w, MAX_DIMENSION / h);
       w = Math.max(1, Math.round(w * ratio));
@@ -85,19 +85,19 @@ export async function processImageFile(file) {
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('瀏覽器無法處理圖片');
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.drawImage(decoded.source, 0, 0, w, h);
 
-    // 優先編碼成高壓縮比 WebP，不支援則降級 JPEG
-    let mime = 'image/webp';
-    let dataUrl = canvas.toDataURL('image/webp', 0.84);
-    if (!dataUrl.startsWith('data:image/webp')) {
-      mime = 'image/jpeg';
-      dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    // 非同步編碼成輕量 WebP (0.78)，不阻塞主執行緒且大幅縮短上傳時間
+    let encoded = await encodeCanvasAsync(canvas, 'image/webp', 0.78);
+    if (!encoded.dataUrl.startsWith('data:image/webp')) {
+      encoded = await encodeCanvasAsync(canvas, 'image/jpeg', 0.80);
     }
 
+    let { dataUrl, mime } = encoded;
     let base64 = stripDataUrlPrefix(dataUrl);
     if (base64.length > MAX_UPLOAD_BASE64) {
-      dataUrl = canvas.toDataURL(mime, 0.65);
+      encoded = await encodeCanvasAsync(canvas, mime, 0.62);
+      dataUrl = encoded.dataUrl;
       base64 = stripDataUrlPrefix(dataUrl);
     }
     if (base64.length > MAX_UPLOAD_BASE64) {
@@ -115,7 +115,7 @@ export async function processImageFile(file) {
       name: file.name || '剪貼簿圖片',
     };
   } finally {
-    URL.revokeObjectURL(objUrl);
+    decoded.cleanup();
   }
 }
 
@@ -135,35 +135,73 @@ export async function processAvatarFile(file) {
     return { dataUrl, base64: stripDataUrlPrefix(dataUrl), mime: 'image/gif' };
   }
 
-  const objUrl = URL.createObjectURL(file);
+  const decoded = await decodeImageSource(file);
   try {
-    const img = await loadHtmlImage(objUrl);
-    const side = Math.min(img.naturalWidth, img.naturalHeight);
-    const sx = Math.round((img.naturalWidth - side) / 2);
-    const sy = Math.round((img.naturalHeight - side) / 2);
+    const side = Math.min(decoded.width, decoded.height);
+    const sx = Math.round((decoded.width - side) / 2);
+    const sy = Math.round((decoded.height - side) / 2);
 
     const canvas = document.createElement('canvas');
     canvas.width = AVATAR_SIZE;
     canvas.height = AVATAR_SIZE;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('瀏覽器無法處理頭像圖片');
-    ctx.drawImage(img, sx, sy, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+    ctx.drawImage(decoded.source, sx, sy, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
 
-    let mime = 'image/webp';
-    let dataUrl = canvas.toDataURL('image/webp', 0.88);
-    if (!dataUrl.startsWith('data:image/webp')) {
-      mime = 'image/jpeg';
-      dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    let encoded = await encodeCanvasAsync(canvas, 'image/webp', 0.85);
+    if (!encoded.dataUrl.startsWith('data:image/webp')) {
+      encoded = await encodeCanvasAsync(canvas, 'image/jpeg', 0.85);
     }
 
     return {
-      dataUrl,
-      base64: stripDataUrlPrefix(dataUrl),
-      mime,
+      dataUrl: encoded.dataUrl,
+      base64: stripDataUrlPrefix(encoded.dataUrl),
+      mime: encoded.mime,
     };
   } finally {
-    URL.revokeObjectURL(objUrl);
+    decoded.cleanup();
   }
+}
+
+async function decodeImageSource(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bmp = await createImageBitmap(file);
+      return {
+        source: bmp,
+        width: bmp.width,
+        height: bmp.height,
+        cleanup: () => bmp.close(),
+      };
+    } catch {
+      // fallback to HTMLImageElement
+    }
+  }
+  const objUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadHtmlImage(objUrl);
+    return {
+      source: img,
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      cleanup: () => URL.revokeObjectURL(objUrl),
+    };
+  } catch (err) {
+    URL.revokeObjectURL(objUrl);
+    throw err;
+  }
+}
+
+async function encodeCanvasAsync(canvas, mime, quality) {
+  if (typeof canvas.toBlob === 'function') {
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+    if (blob) {
+      const dataUrl = await readAsDataURL(blob);
+      return { dataUrl, mime: blob.type || mime };
+    }
+  }
+  const dataUrl = canvas.toDataURL(mime, quality);
+  return { dataUrl, mime };
 }
 
 /**

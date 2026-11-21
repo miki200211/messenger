@@ -1572,6 +1572,26 @@ button {
 .msg-bubble.msg-image-bubble {
   padding: 6px;
 }
+.msg-image-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+.msg-upload-badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.78);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
 .msg-image {
   display: block;
   max-width: min(320px, 68vw);

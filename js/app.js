@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=12';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=12';
+import { CONFIG, getGasUrl } from './config.js?v=13';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=13';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,14 +8,14 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=12';
+} from './emojis.js?v=13';
 import {
   isNotifyEnabled,
   getNotifyPermission,
   toggleNotifications,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=12';
+} from './notify.js?v=13';
 import {
   parseImageContent,
   processImageFile,
@@ -24,11 +24,11 @@ import {
   cacheImageDataUrl,
   getCachedImageDataUrl,
   formatBytes,
-} from './images.js?v=12';
+} from './images.js?v=13';
 import {
   AVATAR_PRESETS,
   renderAvatarEl,
-} from './avatars.js?v=12';
+} from './avatars.js?v=13';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -66,6 +66,10 @@ const state = {
   pollTimer: null,
   syncInFlight: false,
   syncAbort: null,
+  consecutiveSyncErrors: 0,
+  renderedChannelId: null,
+  inFlightReactions: new Map(), // msgId -> 進行中表情請求數（避免舊輪詢蓋掉樂觀狀態）
+  reactionQueue: new Map(),     // msgId -> Promise 佇列（連點多顆表情依序送出不打架）
 };
 
 // ==================== DOM 參照 ====================
@@ -557,6 +561,17 @@ function bindEvents() {
       markCurrentChannelRead();
       renderChannelList();
     }
+  });
+
+  // 網路恢復自動重連同步
+  window.addEventListener('online', () => {
+    if (!state.token) return;
+    state.consecutiveSyncErrors = 0;
+    syncNow();
+  });
+  window.addEventListener('offline', () => {
+    if (!state.token) return;
+    setSyncIndicator('error');
   });
 }
 
@@ -1240,16 +1255,30 @@ function stopPolling() {
   state.syncInFlight = false;
 }
 
-function scheduleNextPoll() {
+function scheduleNextPoll(minDelayMs = 0) {
   if (state.pollTimer) clearTimeout(state.pollTimer);
   if (!state.token) return;
   const hiddenDelay = isNotifyEnabled()
     ? CONFIG.NOTIFY_HIDDEN_POLL_MS
     : CONFIG.HIDDEN_POLL_MS;
-  const delay = document.visibilityState === 'hidden'
+  const base = document.visibilityState === 'hidden'
     ? hiddenDelay
     : CONFIG.ACTIVE_POLL_MS;
+
+  // 網路不穩時指數退避，避免瘋狂撞牆；連上立刻歸零
+  const mult = [1, 1.6, 2.5, 4, 6, 6][Math.min(state.consecutiveSyncErrors, 5)];
+  const cap = document.visibilityState === 'hidden' ? 30000 : 15000;
+  const delay = Math.max(minDelayMs, Math.min(Math.round(base * mult), cap));
   state.pollTimer = setTimeout(() => syncNow(), delay);
+}
+
+/**
+ * 執行寫入操作（發訊息、上傳圖片、按表情、編輯）時延後下一次背景輪詢，
+ * 避免輪詢與寫入在 GAS 端互搶 LockService 造成卡頓。
+ */
+function deferNextPoll(ms = 3200) {
+  if (!state.token || state.syncInFlight) return;
+  scheduleNextPoll(ms);
 }
 
 async function syncNow() {
@@ -1276,6 +1305,7 @@ async function syncNow() {
     );
 
     if (targetChannelId !== state.currentChannelId) return;
+    state.consecutiveSyncErrors = 0;
     setSyncIndicator('ok');
 
     if (res.hasChanges) {
@@ -1317,7 +1347,12 @@ async function syncNow() {
         const isFirstLoad = since === 0;
 
         for (const msg of res.messages) {
-          const existed = msgMap.has(msg.id);
+          const existing = msgMap.get(msg.id);
+          const existed = Boolean(existing);
+          // 若該訊息目前有本機剛點下、尚在送出的表情請求，保留樂觀狀態不被舊輪詢覆蓋閃爍
+          if (existed && (state.inFlightReactions.get(msg.id) || 0) > 0) {
+            msg.reactions = existing.reactions;
+          }
           msgMap.set(msg.id, msg);
           if (!isFirstLoad && !existed && !msg.isDeleted && msg.senderId !== state.user.id) {
             incomingFromOthers.push(msg);
@@ -1402,6 +1437,7 @@ async function syncNow() {
       loadInitialData().catch(() => {});
       return;
     }
+    state.consecutiveSyncErrors = Math.min(state.consecutiveSyncErrors + 1, 5);
     setSyncIndicator('error');
   } finally {
     state.syncInFlight = false;
@@ -1438,54 +1474,128 @@ function getSortedMessages(channelId) {
   return Array.from(map.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 
-function renderMessages({ forceScrollBottom = false } = {}) {
+function getAvatarSig(senderId) {
+  const isMe = state.user && senderId === state.user.id;
+  const prof = state.userProfiles[senderId];
+  const color = (isMe && state.user.avatarColor) || (prof && prof.avatarColor) || '';
+  const av = isMe ? (state.user.avatar || (prof && prof.avatar) || '') : ((prof && prof.avatar) || '');
+  return `${color}|${av}`;
+}
+
+function computeMsgCoreSig(msg, compact) {
+  return [
+    msg.type,
+    msg.content,
+    msg.isDeleted ? 1 : 0,
+    msg.editedAt || 0,
+    msg._sending ? 1 : 0,
+    compact ? 1 : 0,
+    getAvatarSig(msg.senderId),
+  ].join('\u0001');
+}
+
+function renderMessages({ forceScrollBottom = false, forceFull = false } = {}) {
   const channelId = state.currentChannelId;
   if (!channelId) return;
 
   const list = getSortedMessages(channelId);
-  const frag = document.createDocumentFragment();
+  const canPatch = !forceFull && state.renderedChannelId === channelId && list.length > 0;
 
   if (list.length === 0) {
+    els.messagesList.textContent = '';
     const empty = document.createElement('div');
     empty.className = 'messages-empty';
     empty.textContent = '這個頻道還沒有訊息，發送第一則打個招呼吧！';
-    frag.appendChild(empty);
-  } else {
-    let lastDateKey = '';
-    let prevMsg = null;
+    els.messagesList.appendChild(empty);
+    state.renderedChannelId = channelId;
+    return;
+  }
 
-    for (const msg of list) {
-      const dateKey = formatDateDivider(msg.createdAt);
-      if (dateKey !== lastDateKey) {
-        const divider = document.createElement('div');
-        divider.className = 'date-divider';
-        divider.textContent = dateKey;
-        frag.appendChild(divider);
-        lastDateKey = dateKey;
-        prevMsg = null;
+  // 收集現有 DOM 節點以便原地複用（零閃爍、不重載圖片與貼圖）
+  const existingRows = new Map();
+  const existingDividers = new Map();
+  if (canPatch) {
+    for (const child of els.messagesList.children) {
+      if (child.classList.contains('msg-row') && child.dataset.msgId) {
+        existingRows.set(child.dataset.msgId, child);
+      } else if (child.classList.contains('date-divider') && child.dataset.dateKey) {
+        existingDividers.set(child.dataset.dateKey, child);
       }
-
-      const compact = Boolean(
-        prevMsg &&
-        prevMsg.senderId === msg.senderId &&
-        !prevMsg.isDeleted &&
-        (msg.createdAt - prevMsg.createdAt) < 3 * 60 * 1000
-      );
-
-      frag.appendChild(buildMessageRow(msg, compact));
-      prevMsg = msg;
     }
   }
 
-  els.messagesList.textContent = '';
-  els.messagesList.appendChild(frag);
+  const desiredNodes = [];
+  let lastDateKey = '';
+  let prevMsg = null;
+
+  for (const msg of list) {
+    const dateKey = formatDateDivider(msg.createdAt);
+    if (dateKey !== lastDateKey) {
+      let divider = existingDividers.get(dateKey);
+      if (!divider) {
+        divider = document.createElement('div');
+        divider.className = 'date-divider';
+        divider.dataset.dateKey = dateKey;
+        divider.textContent = dateKey;
+      }
+      desiredNodes.push(divider);
+      lastDateKey = dateKey;
+      prevMsg = null;
+    }
+
+    const compact = Boolean(
+      prevMsg &&
+      prevMsg.senderId === msg.senderId &&
+      !prevMsg.isDeleted &&
+      (msg.createdAt - prevMsg.createdAt) < 3 * 60 * 1000
+    );
+
+    const coreSig = computeMsgCoreSig(msg, compact);
+    const reactSig = JSON.stringify(msg.reactions || {});
+    let row = existingRows.get(msg.id);
+
+    if (row && row.dataset.coreSig === coreSig) {
+      if (row.dataset.reactSig !== reactSig) {
+        const reactionsEl = row.querySelector('.msg-reactions');
+        if (reactionsEl) fillReactionPills(reactionsEl, msg);
+        row.dataset.reactSig = reactSig;
+      }
+    } else {
+      row = buildMessageRow(msg, compact, coreSig, reactSig);
+    }
+
+    desiredNodes.push(row);
+    prevMsg = msg;
+  }
+
+  if (!canPatch) {
+    const frag = document.createDocumentFragment();
+    for (const node of desiredNodes) frag.appendChild(node);
+    els.messagesList.textContent = '';
+    els.messagesList.appendChild(frag);
+  } else {
+    const desiredSet = new Set(desiredNodes);
+    for (let i = els.messagesList.children.length - 1; i >= 0; i--) {
+      const child = els.messagesList.children[i];
+      if (!desiredSet.has(child)) child.remove();
+    }
+    for (let i = 0; i < desiredNodes.length; i++) {
+      const node = desiredNodes[i];
+      const current = els.messagesList.children[i];
+      if (current !== node) {
+        els.messagesList.insertBefore(node, current || null);
+      }
+    }
+  }
+
+  state.renderedChannelId = channelId;
 
   if (forceScrollBottom) {
     scrollToBottom(false);
   }
 }
 
-function buildMessageRow(msg, compact) {
+function buildMessageRow(msg, compact, coreSig, reactSig) {
   const isMe = state.user && msg.senderId === state.user.id;
   const row = document.createElement('div');
   row.className = 'msg-row'
@@ -1494,6 +1604,8 @@ function buildMessageRow(msg, compact) {
     + (msg._sending ? ' is-sending' : '')
     + (msg.isDeleted ? ' is-deleted' : '');
   row.dataset.msgId = msg.id;
+  row.dataset.coreSig = coreSig || computeMsgCoreSig(msg, compact);
+  row.dataset.reactSig = reactSig || JSON.stringify(msg.reactions || {});
 
   // 頭像
   const avatarSlot = document.createElement('div');
@@ -1570,6 +1682,8 @@ function buildMessageRow(msg, compact) {
     if (msg.replyTo) {
       bubble.appendChild(buildReplyQuote(msg.replyTo));
     }
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'msg-image-wrap';
     const imgEl = createDriveImageEl(imgMeta.fileId, {
       token: state.token,
       size: 1200,
@@ -1581,7 +1695,14 @@ function buildMessageRow(msg, compact) {
       e.stopPropagation();
       openLightbox(imgMeta, imgEl.src);
     });
-    bubble.appendChild(imgEl);
+    imgWrap.appendChild(imgEl);
+    if (msg._sending) {
+      const badge = document.createElement('div');
+      badge.className = 'msg-upload-badge';
+      badge.textContent = '上傳中…';
+      imgWrap.appendChild(badge);
+    }
+    bubble.appendChild(imgWrap);
     if (imgMeta.caption) {
       const capEl = document.createElement('div');
       capEl.className = 'msg-image-caption';
@@ -1916,6 +2037,7 @@ async function handleSaveEdit() {
   msg.editedAt = Date.now();
   cancelEditMode();
   renderMessages();
+  deferNextPoll();
 
   try {
     const res = await apiPost(
@@ -1998,6 +2120,7 @@ async function handleSendImage() {
   const msgMap = getChannelMsgMap(channelId);
   msgMap.set(tempId, optimisticMsg);
   renderMessages({ forceScrollBottom: true });
+  deferNextPoll(5000);
 
   try {
     const res = await apiPost(
@@ -2113,6 +2236,7 @@ async function sendPayload(type, content) {
   const msgMap = getChannelMsgMap(channelId);
   msgMap.set(tempId, optimisticMsg);
   renderMessages({ forceScrollBottom: true });
+  deferNextPoll();
 
   try {
     const res = await apiPost(
@@ -2145,7 +2269,7 @@ async function sendPayload(type, content) {
   }
 }
 
-async function handleToggleReaction(msgId, emojiId) {
+function handleToggleReaction(msgId, emojiId) {
   const channelId = state.currentChannelId;
   if (!channelId) return;
   closeReactionPicker();
@@ -2154,7 +2278,7 @@ async function handleToggleReaction(msgId, emojiId) {
   const msg = msgMap.get(msgId);
   if (!msg || msg._sending || msg.isDeleted) return;
 
-  // 樂觀更新表情
+  // 立即樂觀更新 UI（0ms 體感延遲）
   const prevReactions = JSON.parse(JSON.stringify(msg.reactions || {}));
   const nextReactions = JSON.parse(JSON.stringify(prevReactions));
   const list = Array.isArray(nextReactions[emojiId]) ? nextReactions[emojiId] : [];
@@ -2172,21 +2296,46 @@ async function handleToggleReaction(msgId, emojiId) {
 
   msg.reactions = nextReactions;
   patchMessageReactionsDom(msg);
+  deferNextPoll();
 
-  try {
-    const res = await apiPost(
-      'toggleReaction',
-      { channelId, msgId, emojiId },
-      { token: state.token }
-    );
-    msg.reactions = res.reactions || {};
-    msg.updatedAt = res.updatedAt || msg.updatedAt;
-    patchMessageReactionsDom(msg);
-  } catch (err) {
-    msg.reactions = prevReactions;
-    patchMessageReactionsDom(msg);
-    showToast('表情更新失敗：' + err.message, 'error');
-  }
+  // 以單則訊息為單位排隊送出，避免連點多顆表情或同時輪詢互相覆蓋
+  const pendingCount = (state.inFlightReactions.get(msgId) || 0) + 1;
+  state.inFlightReactions.set(msgId, pendingCount);
+
+  const prevChain = state.reactionQueue.get(msgId) || Promise.resolve();
+  const nextChain = prevChain.then(async () => {
+    try {
+      const res = await apiPost(
+        'toggleReaction',
+        { channelId, msgId, emojiId },
+        { token: state.token }
+      );
+      const remaining = (state.inFlightReactions.get(msgId) || 1) - 1;
+      if (remaining <= 0) {
+        state.inFlightReactions.delete(msgId);
+        msg.reactions = res.reactions || {};
+        msg.updatedAt = res.updatedAt || msg.updatedAt;
+        if (state.currentChannelId === channelId) {
+          patchMessageReactionsDom(msg);
+        }
+      } else {
+        state.inFlightReactions.set(msgId, remaining);
+      }
+    } catch (err) {
+      const remaining = (state.inFlightReactions.get(msgId) || 1) - 1;
+      if (remaining <= 0) {
+        state.inFlightReactions.delete(msgId);
+      } else {
+        state.inFlightReactions.set(msgId, remaining);
+      }
+      msg.reactions = prevReactions;
+      if (state.currentChannelId === channelId) {
+        patchMessageReactionsDom(msg);
+      }
+      showToast('表情更新失敗：' + err.message, 'error');
+    }
+  });
+  state.reactionQueue.set(msgId, nextChain);
 }
 
 function patchMessageReactionsDom(msg) {
@@ -2196,6 +2345,7 @@ function patchMessageReactionsDom(msg) {
   if (reactionsEl) {
     fillReactionPills(reactionsEl, msg);
   }
+  row.dataset.reactSig = JSON.stringify(msg.reactions || {});
 }
 
 async function handleDeleteMessage(msgId) {
@@ -2212,6 +2362,7 @@ async function handleDeleteMessage(msgId) {
   msg.content = '';
   msg.reactions = {};
   renderMessages();
+  deferNextPoll();
 
   try {
     await apiPost('deleteMessage', { channelId, msgId }, { token: state.token });
@@ -2458,6 +2609,10 @@ function clearSession() {
   state.messagesByChannel.clear();
   state.channelVersion.clear();
   state.channelLastMsgAt.clear();
+  state.inFlightReactions.clear();
+  state.reactionQueue.clear();
+  state.renderedChannelId = null;
+  state.consecutiveSyncErrors = 0;
   state.globalVersion = 0;
   clearReplyTarget();
   cancelEditMode();
