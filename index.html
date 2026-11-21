@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=9" />
+  <link rel="stylesheet" href="css/style.css?v=11" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -298,15 +298,20 @@
     </div>
   </div>
 
-  <!-- ==================== 彈窗：頻道成員資訊 ==================== -->
+  <!-- ==================== 彈窗：頻道設定與成員管理 ==================== -->
   <div id="modal-channel-info" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-backdrop"></div>
     <div class="modal-card">
       <div class="modal-header">
-        <h3 id="info-channel-title">頻道資訊</h3>
+        <h3 id="info-channel-title">頻道設定</h3>
         <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
       </div>
-      <div class="modal-body">
+      <form id="channel-settings-form" class="modal-body">
+        <!-- 僅建立者可修改頻道名稱 -->
+        <div id="info-name-edit-block" class="field hidden">
+          <label class="field-label" for="info-channel-name-input">頻道名稱</label>
+          <input id="info-channel-name-input" type="text" maxlength="30" placeholder="輸入頻道名稱" />
+        </div>
         <div class="info-row">
           <span class="info-label">建立者</span>
           <span id="info-channel-owner"></span>
@@ -320,9 +325,15 @@
         </div>
         <div class="info-members-block">
           <div class="info-label">頻道成員</div>
+          <p id="info-members-hint" class="hint-text hidden">勾選或取消勾選即可新增／移除此頻道的成員</p>
           <ul id="info-members-list" class="members-list"></ul>
         </div>
-      </div>
+        <p id="info-channel-error" class="form-error hidden" style="margin-top: 10px;"></p>
+        <div id="info-owner-footer" class="modal-footer hidden">
+          <button class="btn btn-secondary modal-close" type="button">取消</button>
+          <button id="info-save-btn" class="btn btn-primary" type="submit">儲存設定</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -366,6 +377,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=10"></script>
+  <script type="module" src="js/app.js?v=11"></script>
 </body>
 </html>

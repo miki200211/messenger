@@ -155,6 +155,8 @@ function doPost(e) {
         return jsonOut_(handleJoinChannel_(body));
       case 'resetInviteCode':
         return jsonOut_(handleResetInviteCode_(body));
+      case 'updateChannel':
+        return jsonOut_(handleUpdateChannel_(body));
       case 'syncMessages':
         return jsonOut_(handleSyncMessages_(body));
       case 'sendMessage':
@@ -600,6 +602,87 @@ function handleResetInviteCode_(body) {
     return {
       ok: true,
       inviteCode: newCode,
+      globalVersion: now,
+    };
+  });
+}
+
+function handleUpdateChannel_(body) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const channelId = String(body.channelId || '').trim();
+  const newName = String(body.name || '').trim();
+  const rawMemberIds = Array.isArray(body.memberIds) ? body.memberIds : null;
+
+  if (!channelId) return { ok: false, error: '缺少頻道 ID' };
+  if (newName.length < 1 || newName.length > 30) {
+    return { ok: false, error: '頻道名稱需為 1–30 字元' };
+  }
+
+  return withLock_(function () {
+    const ss = ensureSpreadsheet_();
+    const sheet = ss.getSheetByName(SHEETS.CHANNELS);
+    const rows = getDataRows_(sheet);
+
+    let targetIdx = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) === channelId) {
+        targetIdx = i;
+        break;
+      }
+    }
+
+    if (targetIdx === -1) {
+      return { ok: false, error: '找不到該頻道' };
+    }
+
+    const row = rows[targetIdx];
+    const ownerId = String(row[3]);
+    if (ownerId !== auth.user.id) {
+      return { ok: false, error: '只有頻道建立者可以修改頻道設定' };
+    }
+
+    const profiles = getAllUserProfiles_(ss);
+    let nextMembers = safeJsonParse_(row[5], [ownerId]);
+
+    if (rawMemberIds) {
+      const seen = {};
+      const cleaned = [];
+      // 建立者永遠保留在頻道內
+      seen[ownerId] = true;
+      cleaned.push(ownerId);
+      for (let i = 0; i < rawMemberIds.length; i++) {
+        const uid = String(rawMemberIds[i] || '').trim();
+        if (!uid || seen[uid] || !profiles[uid]) continue;
+        seen[uid] = true;
+        cleaned.push(uid);
+      }
+      nextMembers = cleaned;
+    }
+
+    const nextMemberNames = nextMembers.map(function (uid) {
+      return (profiles[uid] && profiles[uid].displayName) ? profiles[uid].displayName : uid;
+    });
+
+    const now = nextVersion_('global_ver');
+    const rowNum = targetIdx + 2;
+    sheet.getRange(rowNum, 2).setValue(toSheetText_(newName));
+    sheet.getRange(rowNum, 6).setValue(JSON.stringify(nextMembers));
+    sheet.getRange(rowNum, 7).setValue(toSheetText_(nextMemberNames.join(', ')));
+    sheet.getRange(rowNum, 10).setValue(now);
+
+    cacheChannelMembers_(channelId, nextMembers);
+
+    const updatedRow = row.slice();
+    updatedRow[1] = newName;
+    updatedRow[5] = JSON.stringify(nextMembers);
+    updatedRow[6] = nextMemberNames.join(', ');
+    updatedRow[9] = now;
+
+    return {
+      ok: true,
+      channel: formatChannelRow_(updatedRow, auth.user.id),
       globalVersion: now,
     };
   });
@@ -1269,6 +1352,7 @@ function getAllUserProfiles_(ss) {
     const uid = String(r[0] || '');
     if (!uid) continue;
     map[uid] = {
+      username: String(r[1] || ''),
       displayName: String(r[2] || ''),
       avatarColor: String(r[3] || AVATAR_COLORS[0]),
       avatar: String(r[10] || ''),

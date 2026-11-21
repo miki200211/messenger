@@ -170,12 +170,19 @@ const els = {
   joinChannelSubmit: $('join-channel-submit'),
 
   modalChannelInfo: $('modal-channel-info'),
+  channelSettingsForm: $('channel-settings-form'),
   infoChannelTitle: $('info-channel-title'),
+  infoNameEditBlock: $('info-name-edit-block'),
+  infoChannelNameInput: $('info-channel-name-input'),
   infoChannelOwner: $('info-channel-owner'),
   infoInviteRow: $('info-invite-row'),
   infoInviteCode: $('info-invite-code'),
   infoCopyInviteBtn: $('info-copy-invite-btn'),
+  infoMembersHint: $('info-members-hint'),
   infoMembersList: $('info-members-list'),
+  infoChannelError: $('info-channel-error'),
+  infoOwnerFooter: $('info-owner-footer'),
+  infoSaveBtn: $('info-save-btn'),
 
   modalAvatar: $('modal-avatar'),
   avatarModalPreview: $('avatar-modal-preview'),
@@ -349,6 +356,7 @@ function bindEvents() {
 
   // 頻道成員資訊 & 邀請碼操作
   els.channelMembersBtn.addEventListener('click', openChannelInfoModal);
+  els.channelSettingsForm.addEventListener('submit', handleSaveChannelSettings);
   els.copyInviteBtn.addEventListener('click', () => copyInviteCode());
   els.infoCopyInviteBtn.addEventListener('click', () => copyInviteCode());
   els.resetInviteBtn.addEventListener('click', handleResetInviteCode);
@@ -937,7 +945,8 @@ function renderCurrentChannelView() {
   }
 
   els.currentChannelName.textContent = '# ' + ch.name;
-  els.channelMembersBtn.textContent = `👥 ${ch.memberCount} 人`;
+  els.channelMembersBtn.textContent = ch.isOwner ? `👥 ${ch.memberCount} 人 ⚙` : `👥 ${ch.memberCount} 人`;
+  els.channelMembersBtn.title = ch.isOwner ? '頻道設定（修改名稱與管理成員）' : '檢視頻道成員';
   els.channelMembersBtn.classList.remove('hidden');
 
   if (ch.isOwner && ch.inviteCode) {
@@ -1026,8 +1035,20 @@ function openChannelInfoModal() {
   const ch = getCurrentChannel();
   if (!ch) return;
 
-  els.infoChannelTitle.textContent = '# ' + ch.name;
+  els.infoChannelTitle.textContent = ch.isOwner ? '頻道設定' : ('# ' + ch.name);
   els.infoChannelOwner.textContent = ch.ownerName || '建立者';
+  els.infoChannelError.classList.add('hidden');
+
+  if (ch.isOwner) {
+    els.infoNameEditBlock.classList.remove('hidden');
+    els.infoChannelNameInput.value = ch.name;
+    els.infoMembersHint.classList.remove('hidden');
+    els.infoOwnerFooter.classList.remove('hidden');
+  } else {
+    els.infoNameEditBlock.classList.add('hidden');
+    els.infoMembersHint.classList.add('hidden');
+    els.infoOwnerFooter.classList.add('hidden');
+  }
 
   if (ch.isOwner && ch.inviteCode) {
     els.infoInviteCode.textContent = ch.inviteCode;
@@ -1037,12 +1058,88 @@ function openChannelInfoModal() {
   }
 
   els.infoMembersList.textContent = '';
-  const memberIds = Array.isArray(ch.memberIds) && ch.memberIds.length > 0 ? ch.memberIds : null;
-  const names = ch.memberNames && ch.memberNames.length > 0 ? ch.memberNames : [state.user.displayName];
+  const currentMemberIds = Array.isArray(ch.memberIds) && ch.memberIds.length > 0
+    ? ch.memberIds
+    : [ch.ownerId];
+  const memberSet = new Set(currentMemberIds);
 
-  if (memberIds) {
-    for (let i = 0; i < memberIds.length; i++) {
-      const uid = memberIds[i];
+  if (ch.isOwner) {
+    // 建立者檢視：列出所有已註冊使用者，可直接勾選新增或取消勾選移除
+    const allIdsSet = new Set([ch.ownerId, ...currentMemberIds, ...Object.keys(state.userProfiles)]);
+    const allIds = Array.from(allIdsSet).filter(Boolean);
+
+    // 排序：建立者最前 → 已在頻道內 → 其他未加入成員
+    allIds.sort((a, b) => {
+      if (a === ch.ownerId) return -1;
+      if (b === ch.ownerId) return 1;
+      const inA = memberSet.has(a) ? 0 : 1;
+      const inB = memberSet.has(b) ? 0 : 1;
+      if (inA !== inB) return inA - inB;
+      const nameA = (state.userProfiles[a] && state.userProfiles[a].displayName) || a;
+      const nameB = (state.userProfiles[b] && state.userProfiles[b].displayName) || b;
+      return nameA.localeCompare(nameB, 'zh-Hant');
+    });
+
+    for (const uid of allIds) {
+      const prof = state.userProfiles[uid];
+      const isOwnerRow = uid === ch.ownerId;
+      const isChecked = isOwnerRow || memberSet.has(uid);
+      const name = (prof && prof.displayName) || (isOwnerRow ? ch.ownerName : uid);
+      const username = (prof && prof.username) || (uid === state.user.id ? state.user.username : '');
+
+      const li = document.createElement('li');
+      li.className = 'member-toggle-item' + (isChecked ? ' is-checked' : '');
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'member-checkbox';
+      cb.value = uid;
+      cb.checked = isChecked;
+      if (isOwnerRow) cb.disabled = true;
+
+      const av = document.createElement('span');
+      av.className = 'avatar avatar-sm';
+      applyUserAvatar(av, { userId: uid, displayName: name });
+
+      const infoCol = document.createElement('div');
+      infoCol.className = 'member-info-col';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'member-display-name';
+      nameEl.textContent = name;
+      infoCol.appendChild(nameEl);
+      if (username) {
+        const subEl = document.createElement('div');
+        subEl.className = 'member-sub';
+        subEl.textContent = '@' + username;
+        infoCol.appendChild(subEl);
+      }
+
+      li.appendChild(cb);
+      li.appendChild(av);
+      li.appendChild(infoCol);
+
+      if (isOwnerRow) {
+        const badge = document.createElement('span');
+        badge.className = 'member-role-badge';
+        badge.textContent = '建立者';
+        li.appendChild(badge);
+      } else {
+        const syncStyle = () => li.classList.toggle('is-checked', cb.checked);
+        cb.addEventListener('change', syncStyle);
+        li.addEventListener('click', (e) => {
+          if (e.target === cb) return;
+          cb.checked = !cb.checked;
+          syncStyle();
+        });
+      }
+
+      els.infoMembersList.appendChild(li);
+    }
+  } else {
+    // 一般成員：唯讀成員列表
+    const names = ch.memberNames && ch.memberNames.length > 0 ? ch.memberNames : [state.user.displayName];
+    for (let i = 0; i < currentMemberIds.length; i++) {
+      const uid = currentMemberIds[i];
       const prof = state.userProfiles[uid];
       const name = (prof && prof.displayName) || names[i] || uid;
       const li = document.createElement('li');
@@ -1050,30 +1147,67 @@ function openChannelInfoModal() {
       av.className = 'avatar avatar-sm';
       applyUserAvatar(av, { userId: uid, displayName: name });
 
-      const text = document.createElement('span');
-      text.textContent = name + (uid === ch.ownerId ? '（建立者）' : '');
+      const infoCol = document.createElement('div');
+      infoCol.className = 'member-info-col';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'member-display-name';
+      nameEl.textContent = name;
+      infoCol.appendChild(nameEl);
 
       li.appendChild(av);
-      li.appendChild(text);
-      els.infoMembersList.appendChild(li);
-    }
-  } else {
-    for (const name of names) {
-      const li = document.createElement('li');
-      const av = document.createElement('span');
-      av.className = 'avatar avatar-sm';
-      applyUserAvatar(av, { displayName: name });
+      li.appendChild(infoCol);
 
-      const text = document.createElement('span');
-      text.textContent = name + (name === ch.ownerName ? '（建立者）' : '');
-
-      li.appendChild(av);
-      li.appendChild(text);
+      if (uid === ch.ownerId) {
+        const badge = document.createElement('span');
+        badge.className = 'member-role-badge';
+        badge.textContent = '建立者';
+        li.appendChild(badge);
+      }
       els.infoMembersList.appendChild(li);
     }
   }
 
   openModal(els.modalChannelInfo);
+}
+
+async function handleSaveChannelSettings(e) {
+  e.preventDefault();
+  const ch = getCurrentChannel();
+  if (!ch || !ch.isOwner) return;
+
+  els.infoChannelError.classList.add('hidden');
+  const name = els.infoChannelNameInput.value.trim();
+  if (name.length < 1 || name.length > 30) {
+    els.infoChannelError.textContent = '頻道名稱需為 1–30 字元';
+    els.infoChannelError.classList.remove('hidden');
+    return;
+  }
+
+  const checkedBoxes = els.infoMembersList.querySelectorAll('input[type="checkbox"]:checked');
+  const memberIds = Array.from(checkedBoxes).map((cb) => cb.value);
+  if (!memberIds.includes(ch.ownerId)) memberIds.unshift(ch.ownerId);
+
+  setBtnLoading(els.infoSaveBtn, true, '儲存中…');
+  try {
+    const res = await apiPost(
+      'updateChannel',
+      { channelId: ch.id, name, memberIds },
+      { token: state.token }
+    );
+    if (res.channel) {
+      const idx = state.channels.findIndex((c) => c.id === ch.id);
+      if (idx >= 0) state.channels[idx] = res.channel;
+    }
+    renderChannelList();
+    renderCurrentChannelView();
+    closeModal(els.modalChannelInfo);
+    showToast('頻道設定已儲存！', 'success');
+  } catch (err) {
+    els.infoChannelError.textContent = err.message;
+    els.infoChannelError.classList.remove('hidden');
+  } finally {
+    setBtnLoading(els.infoSaveBtn, false, '儲存設定');
+  }
 }
 
 async function copyInviteCode() {
@@ -1261,6 +1395,13 @@ async function syncNow() {
     }
   } catch (err) {
     if (err && err.name === 'AbortError') return;
+    if (err && String(err.message || '').includes('存取權限')) {
+      state.currentChannelId = null;
+      showToast('你已被移出該頻道', 'info');
+      state.syncInFlight = false;
+      loadInitialData().catch(() => {});
+      return;
+    }
     setSyncIndicator('error');
   } finally {
     state.syncInFlight = false;

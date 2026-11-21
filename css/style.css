@@ -1470,38 +1470,85 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 200px;
+  max-height: 230px;
   overflow-y: auto;
 }
 .members-list li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 9px;
+  padding: 7px 10px;
   border-radius: 8px;
   background: var(--bg-app);
+}
+.member-toggle-item {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.14s, background 0.14s;
+}
+.member-toggle-item:hover {
+  border-color: var(--border-strong);
+}
+.member-toggle-item.is-checked {
+  background: var(--accent-soft);
+  border-color: rgba(91, 95, 199, 0.28);
+}
+.member-info-col {
+  flex: 1;
+  min-width: 0;
+}
+.member-display-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.member-checkbox {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.member-role-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .toast-container {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
   z-index: 100;
   pointer-events: none;
+  max-width: calc(100vw - 24px);
 }
 .toast {
   background: var(--bg-surface);
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  border-radius: 8px;
-  padding: 10px 14px;
+  border-radius: 10px;
+  padding: 9px 15px;
   box-shadow: var(--shadow-md);
   font-size: 13px;
-  max-width: 320px;
+  max-width: min(420px, calc(100vw - 24px));
+  text-align: center;
   animation: toast-in 0.2s ease;
 }
 .toast.error {
