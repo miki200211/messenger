@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=4';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=4';
+import { CONFIG, getGasUrl } from './config.js?v=5';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=5';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,14 +8,22 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=4';
+} from './emojis.js?v=5';
 import {
   isNotifyEnabled,
   getNotifyPermission,
   toggleNotifications,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=4';
+} from './notify.js?v=5';
+import {
+  parseImageContent,
+  processImageFile,
+  createDriveImageEl,
+  cacheImageDataUrl,
+  getCachedImageDataUrl,
+  formatBytes,
+} from './images.js?v=5';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -39,7 +47,10 @@ const state = {
   globalVersion: 0,
   lastRead: loadJson(READ_KEY, {}),
   unreadTitleCount: 0,
-  replyTarget: null,            // { id, senderName, type, preview }
+  replyTarget: null,            // { id, senderName, type, preview, fileId }
+  editTarget: null,             // { id, type, originalText }
+  pendingImage: null,           // { dataUrl, base64, mime, width, height, sizeBytes, name }
+  dragDepth: 0,
   pickerMode: 'sticker',
   pickerCategory: '全部',
   reactionPickerMsgId: null,
@@ -94,6 +105,7 @@ const els = {
   emptyState: $('empty-state'),
   emptyCreateBtn: $('empty-create-btn'),
   emptyJoinBtn: $('empty-join-btn'),
+  dropOverlay: $('drop-overlay'),
   messagesWrapper: $('messages-wrapper'),
   messagesList: $('messages-list'),
   scrollBottomBtn: $('scroll-bottom-btn'),
@@ -104,7 +116,19 @@ const els = {
   replyBarPreview: $('reply-bar-preview'),
   cancelReplyBtn: $('cancel-reply-btn'),
 
+  editBar: $('edit-bar'),
+  editBarPreview: $('edit-bar-preview'),
+  cancelEditBtn: $('cancel-edit-btn'),
+
+  imagePreviewBar: $('image-preview-bar'),
+  imagePreviewThumb: $('image-preview-thumb'),
+  imagePreviewName: $('image-preview-name'),
+  imagePreviewMeta: $('image-preview-meta'),
+  cancelImageBtn: $('cancel-image-btn'),
+
   toggleStickerBtn: $('toggle-sticker-btn'),
+  uploadImageBtn: $('upload-image-btn'),
+  imageFileInput: $('image-file-input'),
   stickerPopover: $('sticker-popover'),
   pickerTabSticker: $('picker-tab-sticker'),
   pickerTabEmoji: $('picker-tab-emoji'),
@@ -115,6 +139,12 @@ const els = {
 
   messageInput: $('message-input'),
   sendBtn: $('send-btn'),
+
+  lightboxModal: $('lightbox-modal'),
+  lightboxBackdrop: $('lightbox-backdrop'),
+  lightboxCloseBtn: $('lightbox-close-btn'),
+  lightboxImg: $('lightbox-img'),
+  lightboxCaption: $('lightbox-caption'),
 
   modalCreateChannel: $('modal-create-channel'),
   createChannelForm: $('create-channel-form'),
@@ -277,8 +307,93 @@ function bindEvents() {
     });
   });
 
-  // 回覆取消
+  // 回覆 / 編輯 / 圖片預覽取消
   els.cancelReplyBtn.addEventListener('click', clearReplyTarget);
+  els.cancelEditBtn.addEventListener('click', cancelEditMode);
+  els.cancelImageBtn.addEventListener('click', clearPendingImage);
+
+  // 上傳圖片按鈕與檔案選擇器
+  els.uploadImageBtn.addEventListener('click', () => {
+    if (!state.currentChannelId) return;
+    if (state.editTarget) cancelEditMode();
+    els.imageFileInput.click();
+  });
+  els.imageFileInput.addEventListener('change', () => {
+    const file = els.imageFileInput.files && els.imageFileInput.files[0];
+    els.imageFileInput.value = '';
+    if (file) attachImageFile(file);
+  });
+
+  // Ctrl+V 剪貼簿貼上圖片
+  document.addEventListener('paste', (e) => {
+    if (!state.token || !state.currentChannelId) return;
+    if (document.querySelector('.modal:not(.hidden)')) return;
+    const clip = e.clipboardData;
+    if (!clip) return;
+
+    let imageFile = null;
+    if (clip.items) {
+      for (const item of clip.items) {
+        if (item.type && item.type.startsWith('image/')) {
+          imageFile = item.getAsFile();
+          break;
+        }
+      }
+    }
+    if (!imageFile && clip.files) {
+      for (const f of clip.files) {
+        if (f.type && f.type.startsWith('image/')) {
+          imageFile = f;
+          break;
+        }
+      }
+    }
+    if (!imageFile) return;
+
+    e.preventDefault();
+    if (state.editTarget) cancelEditMode();
+    attachImageFile(imageFile);
+  });
+
+  // 拖曳圖片至聊天視窗上傳
+  const chatMain = document.querySelector('.chat-main');
+  if (chatMain) {
+    chatMain.addEventListener('dragenter', (e) => {
+      if (!state.token || !state.currentChannelId) return;
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      state.dragDepth += 1;
+      els.dropOverlay.classList.remove('hidden');
+    });
+    chatMain.addEventListener('dragover', (e) => {
+      if (!state.token || !state.currentChannelId) return;
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+    });
+    chatMain.addEventListener('dragleave', () => {
+      state.dragDepth = Math.max(0, state.dragDepth - 1);
+      if (state.dragDepth === 0) els.dropOverlay.classList.add('hidden');
+    });
+    chatMain.addEventListener('drop', (e) => {
+      e.preventDefault();
+      state.dragDepth = 0;
+      els.dropOverlay.classList.add('hidden');
+      if (!state.token || !state.currentChannelId) return;
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      const imgFile = Array.from(files).find((f) => f.type && f.type.startsWith('image/'));
+      if (!imgFile) {
+        showToast('目前僅支援上傳圖片檔案', 'error');
+        return;
+      }
+      if (state.editTarget) cancelEditMode();
+      attachImageFile(imgFile);
+    });
+  }
+
+  // Lightbox 大圖預覽關閉
+  els.lightboxBackdrop.addEventListener('click', closeLightbox);
+  els.lightboxCloseBtn.addEventListener('click', closeLightbox);
 
   // 貼圖 / 表情面板
   els.toggleStickerBtn.addEventListener('click', (e) => {
@@ -300,10 +415,10 @@ function bindEvents() {
   els.messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
-      handleSendText();
+      handleComposerSubmit();
     }
   });
-  els.sendBtn.addEventListener('click', handleSendText);
+  els.sendBtn.addEventListener('click', handleComposerSubmit);
 
   // 捲動到底部提示鈕
   els.messagesList.addEventListener('scroll', () => {
@@ -338,10 +453,20 @@ function bindEvents() {
   // Esc 快捷鍵
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (!els.lightboxModal.classList.contains('hidden')) {
+      closeLightbox();
+      return;
+    }
     document.querySelectorAll('.modal:not(.hidden)').forEach(closeModal);
     closeStickerPopover();
     closeReactionPicker();
-    if (state.replyTarget) clearReplyTarget();
+    if (state.editTarget) {
+      cancelEditMode();
+    } else if (state.pendingImage) {
+      clearPendingImage();
+    } else if (state.replyTarget) {
+      clearReplyTarget();
+    }
   });
 
   // 分頁背景 / 前景智慧切換輪詢頻率，回到前景清除未讀標題
@@ -493,6 +618,8 @@ async function selectChannel(channelId) {
   state.currentChannelId = channelId;
   localStorage.setItem(LAST_CHANNEL_KEY, channelId);
   clearReplyTarget();
+  cancelEditMode();
+  clearPendingImage();
   closeStickerPopover();
   closeReactionPicker();
   toggleSidebar(false);
@@ -811,9 +938,15 @@ async function syncNow() {
         const last = incomingFromOthers[incomingFromOthers.length - 1];
         const ch = getCurrentChannel();
         const chName = ch ? ch.name : 'Messenger';
-        const body = last.type === 'sticker'
-          ? `[貼圖] ${getEmojiById(last.content).label}`
-          : last.content.slice(0, 80);
+        let body = '';
+        if (last.type === 'sticker') {
+          body = `[貼圖] ${getEmojiById(last.content).label}`;
+        } else if (last.type === 'image') {
+          const imgMeta = parseImageContent(last.content);
+          body = imgMeta.caption ? `[圖片] ${imgMeta.caption.slice(0, 60)}` : '[圖片]';
+        } else {
+          body = last.content.slice(0, 80);
+        }
 
         ringBellIcon();
         notifyIncomingMessage({
@@ -976,6 +1109,12 @@ function buildMessageRow(msg, compact) {
     time.textContent = msg._sending ? '傳送中…' : formatTime(msg.createdAt);
     meta.appendChild(sender);
     meta.appendChild(time);
+    if (msg.editedAt > 0 && !msg.isDeleted && !msg._sending) {
+      const edited = document.createElement('span');
+      edited.className = 'msg-edited-tag';
+      edited.textContent = '(已編輯)';
+      meta.appendChild(edited);
+    }
     col.appendChild(meta);
   }
 
@@ -984,7 +1123,7 @@ function buildMessageRow(msg, compact) {
 
   // 手機點擊訊息顯示浮動表情與回覆列
   bubbleWrap.addEventListener('click', (e) => {
-    if (e.target.closest('button') || e.target.closest('a') || e.target.closest('.msg-quote')) return;
+    if (e.target.closest('button') || e.target.closest('a') || e.target.closest('.msg-quote') || e.target.closest('.msg-image')) return;
     const active = row.classList.contains('touch-active');
     document.querySelectorAll('.msg-row.touch-active').forEach((n) => n.classList.remove('touch-active'));
     if (!active && !msg.isDeleted && !msg._sending) {
@@ -997,7 +1136,7 @@ function buildMessageRow(msg, compact) {
     bubbleWrap.appendChild(buildHoverToolbar(msg, isMe));
   }
 
-  // 內容主體（收回 / 貼圖 / 文字）
+  // 內容主體（收回 / 貼圖 / 圖片 / 文字）
   if (msg.isDeleted) {
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
@@ -1011,6 +1150,38 @@ function buildMessageRow(msg, compact) {
     }
     stickerBox.appendChild(createFluentImg(msg.content, 'msg-sticker-img'));
     bubbleWrap.appendChild(stickerBox);
+  } else if (msg.type === 'image') {
+    const imgMeta = parseImageContent(msg.content);
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble msg-image-bubble';
+    if (msg.replyTo) {
+      bubble.appendChild(buildReplyQuote(msg.replyTo));
+    }
+    const imgEl = createDriveImageEl(imgMeta.fileId, {
+      token: state.token,
+      size: 1200,
+      className: 'msg-image',
+      alt: imgMeta.caption || '圖片',
+      previewUrl: msg._previewUrl || '',
+    });
+    imgEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox(imgMeta, imgEl.src);
+    });
+    bubble.appendChild(imgEl);
+    if (imgMeta.caption) {
+      const capEl = document.createElement('div');
+      capEl.className = 'msg-image-caption';
+      renderSafeTextWithLinks(capEl, imgMeta.caption);
+      bubble.appendChild(capEl);
+    }
+    if (compact && msg.editedAt > 0 && !msg._sending) {
+      const edited = document.createElement('div');
+      edited.className = 'msg-edited-tag';
+      edited.textContent = '(已編輯)';
+      bubble.appendChild(edited);
+    }
+    bubbleWrap.appendChild(bubble);
   } else {
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
@@ -1021,6 +1192,12 @@ function buildMessageRow(msg, compact) {
     textEl.className = 'msg-text';
     renderSafeTextWithLinks(textEl, msg.content);
     bubble.appendChild(textEl);
+    if (compact && msg.editedAt > 0 && !msg._sending) {
+      const edited = document.createElement('div');
+      edited.className = 'msg-edited-tag';
+      edited.textContent = '(已編輯)';
+      bubble.appendChild(edited);
+    }
     bubbleWrap.appendChild(bubble);
   }
 
@@ -1082,6 +1259,20 @@ function buildHoverToolbar(msg, isMe) {
   });
   bar.appendChild(replyBtn);
 
+  // 編輯按鈕（僅本人發送的文字或圖片訊息）
+  if (isMe && (msg.type === 'text' || msg.type === 'image')) {
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'hover-action-btn';
+    editBtn.title = msg.type === 'image' ? '編輯圖片說明' : '編輯訊息';
+    editBtn.textContent = '✏';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startEditMessage(msg);
+    });
+    bar.appendChild(editBtn);
+  }
+
   // 收回按鈕（僅本人或頻道建立者）
   const ch = getCurrentChannel();
   if (isMe || (ch && ch.isOwner)) {
@@ -1107,6 +1298,13 @@ function buildReplyQuote(replyTo) {
 
   if (replyTo.type === 'sticker') {
     box.appendChild(createFluentImg(replyTo.preview, 'msg-quote-thumb'));
+  } else if (replyTo.type === 'image' && replyTo.fileId) {
+    box.appendChild(createDriveImageEl(replyTo.fileId, {
+      token: state.token,
+      size: 120,
+      className: 'msg-quote-img-thumb',
+      alt: '圖片縮圖',
+    }));
   }
 
   const textWrap = document.createElement('div');
@@ -1180,19 +1378,34 @@ function jumpToMessage(msgId) {
   setTimeout(() => target.classList.remove('highlight-flash'), 1600);
 }
 
-// ==================== 發送訊息 / 貼圖 / 回覆 / 表情 / 收回 ====================
+// ==================== 發送訊息 / 編輯 / 圖片 / 貼圖 / 回覆 / 表情 / 收回 ====================
 function setReplyTarget(msg) {
+  if (state.editTarget) cancelEditMode();
+
+  let preview = '';
+  let fileId = '';
+  if (msg.type === 'sticker') {
+    preview = msg.content;
+  } else if (msg.type === 'image') {
+    const imgMeta = parseImageContent(msg.content);
+    fileId = imgMeta.fileId;
+    preview = imgMeta.caption ? `[圖片] ${imgMeta.caption.slice(0, 60)}` : '[圖片]';
+  } else {
+    preview = msg.content.slice(0, 80);
+  }
+
   state.replyTarget = {
     id: msg.id,
     senderName: msg.senderName,
     type: msg.type,
-    preview: msg.type === 'sticker' ? msg.content : msg.content.slice(0, 80),
+    preview,
+    fileId,
   };
   els.replyBarSender.textContent = msg.senderName;
   if (msg.type === 'sticker') {
     els.replyBarPreview.textContent = `[貼圖] ${getEmojiById(msg.content).label}`;
   } else {
-    els.replyBarPreview.textContent = state.replyTarget.preview;
+    els.replyBarPreview.textContent = preview;
   }
   els.replyBar.classList.remove('hidden');
   els.messageInput.focus();
@@ -1201,6 +1414,248 @@ function setReplyTarget(msg) {
 function clearReplyTarget() {
   state.replyTarget = null;
   els.replyBar.classList.add('hidden');
+}
+
+function startEditMessage(msg) {
+  clearReplyTarget();
+  clearPendingImage();
+  closeStickerPopover();
+  closeReactionPicker();
+
+  let originalText = '';
+  if (msg.type === 'image') {
+    originalText = parseImageContent(msg.content).caption || '';
+  } else {
+    originalText = msg.content || '';
+  }
+
+  state.editTarget = {
+    id: msg.id,
+    type: msg.type,
+    originalText,
+  };
+
+  els.editBarPreview.textContent = msg.type === 'image'
+    ? (originalText ? `[圖片說明] ${originalText}` : '[圖片] 新增或修改說明文字')
+    : originalText.slice(0, 80);
+  els.editBar.classList.remove('hidden');
+  els.sendBtn.classList.add('editing');
+  els.sendBtn.title = '儲存編輯';
+
+  els.messageInput.value = originalText;
+  autoResizeInput();
+  els.messageInput.focus();
+  els.messageInput.selectionStart = els.messageInput.selectionEnd = els.messageInput.value.length;
+}
+
+function cancelEditMode() {
+  if (!state.editTarget) return;
+  state.editTarget = null;
+  els.editBar.classList.add('hidden');
+  els.sendBtn.classList.remove('editing');
+  els.sendBtn.title = '送出訊息';
+  els.messageInput.value = '';
+  autoResizeInput();
+}
+
+async function handleComposerSubmit() {
+  if (state.editTarget) {
+    await handleSaveEdit();
+    return;
+  }
+  if (state.pendingImage) {
+    await handleSendImage();
+    return;
+  }
+  await handleSendText();
+}
+
+async function handleSaveEdit() {
+  const target = state.editTarget;
+  const channelId = state.currentChannelId;
+  if (!target || !channelId) return;
+
+  const newText = els.messageInput.value.trim();
+  if (target.type === 'text' && !newText) {
+    showToast('訊息內容不可為空', 'error');
+    return;
+  }
+  if (newText === target.originalText) {
+    cancelEditMode();
+    return;
+  }
+
+  const msgMap = getChannelMsgMap(channelId);
+  const msg = msgMap.get(target.id);
+  if (!msg) {
+    cancelEditMode();
+    return;
+  }
+
+  const backup = { ...msg };
+  if (target.type === 'image') {
+    const imgObj = parseImageContent(msg.content);
+    imgObj.caption = newText;
+    msg.content = JSON.stringify(imgObj);
+  } else {
+    msg.content = newText;
+  }
+  msg.editedAt = Date.now();
+  cancelEditMode();
+  renderMessages();
+
+  try {
+    const res = await apiPost(
+      'editMessage',
+      { channelId, msgId: target.id, content: newText },
+      { token: state.token }
+    );
+    if (res.message) {
+      msgMap.set(res.message.id, res.message);
+      if (state.currentChannelId === channelId) renderMessages();
+    }
+    showToast('訊息已更新', 'success');
+  } catch (err) {
+    msgMap.set(target.id, backup);
+    if (state.currentChannelId === channelId) renderMessages();
+    showToast('編輯失敗：' + err.message, 'error');
+  }
+}
+
+async function attachImageFile(file) {
+  try {
+    const processed = await processImageFile(file);
+    state.pendingImage = processed;
+    els.imagePreviewThumb.src = processed.dataUrl;
+    els.imagePreviewName.textContent = processed.name;
+    els.imagePreviewMeta.textContent =
+      `${processed.width} × ${processed.height} • ${formatBytes(processed.sizeBytes)} • 按 Enter 送出，可附加說明文字`;
+    els.imagePreviewBar.classList.remove('hidden');
+    closeStickerPopover();
+    els.messageInput.focus();
+  } catch (err) {
+    showToast(err.message || '圖片處理失敗', 'error');
+  }
+}
+
+function clearPendingImage() {
+  state.pendingImage = null;
+  els.imagePreviewThumb.removeAttribute('src');
+  els.imagePreviewBar.classList.add('hidden');
+}
+
+async function handleSendImage() {
+  const img = state.pendingImage;
+  const channelId = state.currentChannelId;
+  if (!img || !channelId) return;
+
+  const caption = els.messageInput.value.trim().slice(0, 500);
+  const reply = state.replyTarget ? { ...state.replyTarget } : null;
+
+  clearPendingImage();
+  clearReplyTarget();
+  els.messageInput.value = '';
+  autoResizeInput();
+
+  const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  const optimisticMsg = {
+    id: tempId,
+    channelId,
+    senderId: state.user.id,
+    senderName: state.user.displayName,
+    type: 'image',
+    content: JSON.stringify({
+      fileId: '',
+      caption,
+      width: img.width,
+      height: img.height,
+      mime: img.mime,
+    }),
+    replyToId: reply ? reply.id : '',
+    replyTo: reply,
+    reactions: {},
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    editedAt: 0,
+    isDeleted: false,
+    _sending: true,
+    _previewUrl: img.dataUrl,
+  };
+
+  const msgMap = getChannelMsgMap(channelId);
+  msgMap.set(tempId, optimisticMsg);
+  renderMessages({ forceScrollBottom: true });
+
+  try {
+    const res = await apiPost(
+      'sendMessage',
+      {
+        channelId,
+        type: 'image',
+        imageData: img.base64,
+        imageMime: img.mime,
+        caption,
+        width: img.width,
+        height: img.height,
+        replyToId: reply ? reply.id : '',
+      },
+      { token: state.token }
+    );
+    const savedMeta = parseImageContent(res.message.content);
+    if (savedMeta.fileId) {
+      cacheImageDataUrl(savedMeta.fileId, img.dataUrl);
+    }
+    msgMap.delete(tempId);
+    msgMap.set(res.message.id, res.message);
+    state.channelLastMsgAt.set(channelId, Number(res.message.createdAt || Date.now()));
+    markCurrentChannelRead();
+    if (state.currentChannelId === channelId) {
+      renderMessages({ forceScrollBottom: true });
+    }
+  } catch (err) {
+    msgMap.delete(tempId);
+    if (state.currentChannelId === channelId) {
+      renderMessages();
+      // 還原待傳圖片方便重試
+      state.pendingImage = img;
+      els.imagePreviewThumb.src = img.dataUrl;
+      els.imagePreviewName.textContent = img.name;
+      els.imagePreviewMeta.textContent =
+        `${img.width} × ${img.height} • ${formatBytes(img.sizeBytes)} • 按 Enter 重試送出`;
+      els.imagePreviewBar.classList.remove('hidden');
+      if (caption && !els.messageInput.value) {
+        els.messageInput.value = caption;
+        autoResizeInput();
+      }
+    }
+    showToast('圖片上傳失敗：' + err.message, 'error');
+  }
+}
+
+function openLightbox(imgMeta, fallbackSrc) {
+  const cached = imgMeta.fileId ? getCachedImageDataUrl(imgMeta.fileId) : '';
+  const highResUrl = cached
+    || (imgMeta.fileId ? `https://lh3.googleusercontent.com/d/${encodeURIComponent(imgMeta.fileId)}=w2400` : fallbackSrc);
+
+  els.lightboxImg.onerror = () => {
+    if (fallbackSrc && els.lightboxImg.src !== fallbackSrc) {
+      els.lightboxImg.src = fallbackSrc;
+    }
+  };
+  els.lightboxImg.src = highResUrl || fallbackSrc || '';
+
+  if (imgMeta.caption) {
+    els.lightboxCaption.textContent = imgMeta.caption;
+    els.lightboxCaption.classList.remove('hidden');
+  } else {
+    els.lightboxCaption.classList.add('hidden');
+  }
+  els.lightboxModal.classList.remove('hidden');
+}
+
+function closeLightbox() {
+  els.lightboxModal.classList.add('hidden');
+  els.lightboxImg.removeAttribute('src');
 }
 
 async function handleSendText() {
@@ -1214,6 +1669,7 @@ async function handleSendText() {
 
 async function handleSendSticker(emojiId) {
   if (!state.currentChannelId) return;
+  if (state.editTarget) cancelEditMode();
   pushRecentSticker(emojiId);
   closeStickerPopover();
   await sendPayload('sticker', emojiId);
@@ -1588,6 +2044,10 @@ function clearSession() {
   state.channelVersion.clear();
   state.channelLastMsgAt.clear();
   state.globalVersion = 0;
+  clearReplyTarget();
+  cancelEditMode();
+  clearPendingImage();
+  closeLightbox();
   clearUnreadTitle();
   localStorage.removeItem(SESSION_KEY);
 }

@@ -1,27 +1,39 @@
 /**
  * Messenger - Google Apps Script 後端 (Google Drive + Google Sheets 資料庫)
  *
- * 【部署步驟】
+ * 【首次部署步驟】
  * 1. 前往 https://script.google.com/ 建立新專案，貼上本檔案全部內容並存檔。
  * 2. 建議在「專案設定 → 指令碼屬性 (Script Properties)」新增：
  *      - DB_FOLDER_ID   : 你的 Google Drive 資料夾 ID
  *      - REGISTER_CODE  : 註冊通關碼（留空則不限制註冊）
  *    （或直接修改下方 DEFAULT_CONFIG，但請勿把真實註冊碼推上公開 GitHub）
  * 3. 在上方函式下拉選單選擇 `setupDatabase` 並按「執行」，同意授權後會自動在
- *    指定的 Google Drive 資料夾建立名為 `messenger_db` 的試算表（含 Users/Channels/Messages）。
+ *    指定的 Google Drive 資料夾建立試算表 `messenger_db` 與圖片資料夾 `messenger_images`。
  * 4. 點右上角「部署 → 新增部署作業 → 網頁應用程式」：
  *      - 執行身分：我 (Me)
  *      - 誰可以存取：所有人 (Anyone)
- * 5. 複製產出的網頁應用程式 URL，貼到前端 `js/config.js` 的 `GAS_URL`。
+ *
+ * 【更新程式步驟（網址不變）】
+ * 1. 覆蓋貼上新程式碼並存檔。
+ * 2. 點右上角「部署 → 管理部署作業 → 右上角鉛筆編輯 → 版本選『新版本』→ 部署」。
  */
 
 const DEFAULT_CONFIG = {
   DB_FOLDER_ID: 'YOUR_GOOGLE_DRIVE_FOLDER_ID',
   SPREADSHEET_NAME: 'messenger_db',
+  IMAGES_FOLDER_NAME: 'messenger_images',
   REGISTER_CODE: 'YOUR_REGISTER_CODE',
   TOKEN_TTL_DAYS: 30,
   INITIAL_MESSAGE_LIMIT: 150,
+  MAX_IMAGE_BASE64_CHARS: 4800000, // 約 3.5 MB
   TIMEZONE: 'Asia/Taipei',
+};
+
+const ALLOWED_IMAGE_MIMES = {
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
 };
 
 const SHEETS = {
@@ -70,6 +82,7 @@ const HEADERS = {
     'created_at_text',
     'updated_at',
     'is_deleted',
+    'edited_at',
   ],
 };
 
@@ -82,17 +95,17 @@ const AVATAR_COLORS = [
 // 公開入口：初始化 / 健康檢查 / API 派發
 // ============================================================================
 
-/**
- * 首次部署前請在 Apps Script 編輯器手動執行一次，完成授權並建立試算表。
- */
 function setupDatabase() {
   const ss = ensureSpreadsheet_();
+  const imgFolder = ensureImagesFolder_();
   ensureServerPepper_();
   Logger.log('資料庫就緒！試算表網址：' + ss.getUrl());
+  Logger.log('圖片資料夾 ID：' + imgFolder.getId());
   return {
     ok: true,
     spreadsheetId: ss.getId(),
     spreadsheetUrl: ss.getUrl(),
+    imagesFolderId: imgFolder.getId(),
   };
 }
 
@@ -134,10 +147,14 @@ function doPost(e) {
         return jsonOut_(handleSyncMessages_(body));
       case 'sendMessage':
         return jsonOut_(handleSendMessage_(body));
+      case 'editMessage':
+        return jsonOut_(handleEditMessage_(body));
       case 'toggleReaction':
         return jsonOut_(handleToggleReaction_(body));
       case 'deleteMessage':
         return jsonOut_(handleDeleteMessage_(body));
+      case 'getImage':
+        return jsonOut_(handleGetImage_(body));
       default:
         return jsonOut_({ ok: false, error: '不支援的操作：' + action });
     }
@@ -488,7 +505,7 @@ function handleResetInviteCode_(body) {
 }
 
 // ============================================================================
-// 訊息同步 / 發送 / 表情 / 收回 API
+// 訊息同步 / 發送（文字・貼圖・圖片）/ 編輯 / 表情 / 收回 / 圖片讀取 API
 // ============================================================================
 
 function handleSyncMessages_(body) {
@@ -497,7 +514,6 @@ function handleSyncMessages_(body) {
   const since = Number(body.since || 0);
   const sinceGlobal = Number(body.sinceGlobal || 0);
 
-  // 快速通道：若快取命中且頻道與全域皆無新異動，不開試算表直接回傳
   if (sinceGlobal > 0 && (!channelId || since > 0)) {
     const cachedUser = getCachedUserByToken_(token);
     if (cachedUser) {
@@ -516,7 +532,6 @@ function handleSyncMessages_(body) {
     }
   }
 
-  // 標準通道：讀取試算表並回填快取
   const auth = requireAuth_(token);
   if (!auth.ok) return auth;
 
@@ -589,19 +604,72 @@ function handleSendMessage_(body) {
 
   const channelId = String(body.channelId || '').trim();
   const type = String(body.type || 'text').trim();
-  const content = String(body.content || '').trim();
   const replyToId = String(body.replyToId || '').trim();
 
   if (!channelId) return { ok: false, error: '缺少頻道 ID' };
-  if (type !== 'text' && type !== 'sticker') {
+  if (type !== 'text' && type !== 'sticker' && type !== 'image') {
     return { ok: false, error: '不支援的訊息格式' };
   }
-  if (!content) return { ok: false, error: '訊息內容不可為空' };
-  if (type === 'text' && content.length > 2000) {
-    return { ok: false, error: '單則訊息最多 2000 字元' };
-  }
-  if (type === 'sticker' && !/^[a-z0-9_]{1,40}$/.test(content)) {
-    return { ok: false, error: '無效的貼圖代碼' };
+
+  let storedContent = '';
+
+  if (type === 'text') {
+    storedContent = String(body.content || '').trim();
+    if (!storedContent) return { ok: false, error: '訊息內容不可為空' };
+    if (storedContent.length > 2000) {
+      return { ok: false, error: '單則訊息最多 2000 字元' };
+    }
+  } else if (type === 'sticker') {
+    storedContent = String(body.content || '').trim();
+    if (!/^[a-z0-9_]{1,40}$/.test(storedContent)) {
+      return { ok: false, error: '無效的貼圖代碼' };
+    }
+  } else if (type === 'image') {
+    const mime = String(body.imageMime || '').trim().toLowerCase();
+    const ext = ALLOWED_IMAGE_MIMES[mime];
+    if (!ext) {
+      return { ok: false, error: '僅支援 WebP、JPG、PNG、GIF 圖片格式' };
+    }
+
+    let b64 = String(body.imageData || '').trim();
+    const commaIdx = b64.indexOf(',');
+    if (commaIdx !== -1 && b64.indexOf('data:') === 0) {
+      b64 = b64.slice(commaIdx + 1);
+    }
+    if (!b64) return { ok: false, error: '圖片資料不可為空' };
+    if (b64.length > DEFAULT_CONFIG.MAX_IMAGE_BASE64_CHARS) {
+      return { ok: false, error: '圖片過大，請控制在 3.5 MB 以內' };
+    }
+
+    const caption = String(body.caption || '').trim().slice(0, 500);
+    const width = Math.max(0, Math.min(8000, Number(body.width || 0) || 0));
+    const height = Math.max(0, Math.min(8000, Number(body.height || 0) || 0));
+
+    // 先檢查成員資格再寫入 Drive 圖片，避免非成員亂塞檔案
+    const preCheck = findChannelForMember_(ensureSpreadsheet_(), channelId, auth.user.id);
+    if (!preCheck.ok) return preCheck;
+
+    const bytes = Utilities.base64Decode(b64);
+    const stamp = Utilities.formatDate(new Date(), DEFAULT_CONFIG.TIMEZONE, 'yyyyMMdd_HHmmss');
+    const safeUser = auth.user.username.replace(/[^a-z0-9_-]/gi, '').slice(0, 16) || 'user';
+    const fileName = stamp + '_' + safeUser + '_' + randomId_(5) + '.' + ext;
+
+    const imgFolder = ensureImagesFolder_();
+    const blob = Utilities.newBlob(bytes, mime, fileName);
+    const file = imgFolder.createFile(blob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      // 若網域限制公開分享，前端會自動走 getImage 備援讀取
+    }
+
+    storedContent = JSON.stringify({
+      fileId: file.getId(),
+      caption: caption,
+      width: width,
+      height: height,
+      mime: mime,
+    });
   }
 
   return withLock_(function () {
@@ -620,13 +688,27 @@ function handleSendMessage_(body) {
           const deleted = isTruthy_(r[13]);
           const origType = String(r[5] || 'text');
           const origContent = String(r[6] || '');
+          let previewText = '';
+          let previewFileId = '';
+
+          if (deleted) {
+            previewText = '此訊息已收回';
+          } else if (origType === 'sticker') {
+            previewText = origContent;
+          } else if (origType === 'image') {
+            const imgMeta = safeJsonParse_(origContent, {});
+            previewFileId = String(imgMeta.fileId || '');
+            previewText = imgMeta.caption ? '[圖片] ' + String(imgMeta.caption).slice(0, 60) : '[圖片]';
+          } else {
+            previewText = origContent.slice(0, 80);
+          }
+
           replyPreview = {
             id: replyToId,
             senderName: String(r[4] || ''),
             type: deleted ? 'deleted' : origType,
-            preview: deleted
-              ? '此訊息已收回'
-              : (origType === 'sticker' ? origContent : origContent.slice(0, 80)),
+            preview: previewText,
+            fileId: previewFileId,
           };
           break;
         }
@@ -644,7 +726,7 @@ function handleSendMessage_(body) {
       toSheetText_(auth.user.id),
       toSheetText_(auth.user.displayName),
       toSheetText_(type),
-      toSheetText_(content),
+      type === 'image' ? storedContent : toSheetText_(storedContent),
       toSheetText_(replyToId),
       replyPreview ? JSON.stringify(replyPreview) : '',
       '{}',
@@ -652,9 +734,9 @@ function handleSendMessage_(body) {
       toSheetText_(nowText),
       now,
       false,
+      0,
     ]);
 
-    // 更新頻道最後訊息時間
     const chSheet = ss.getSheetByName(SHEETS.CHANNELS);
     chSheet.getRange(chInfo.rowNum, 9).setValue(now);
     chSheet.getRange(chInfo.rowNum, 10).setValue(now);
@@ -671,16 +753,126 @@ function handleSendMessage_(body) {
         senderId: auth.user.id,
         senderName: auth.user.displayName,
         type: type,
-        content: content,
+        content: storedContent,
         replyToId: replyToId,
         replyTo: replyPreview,
         reactions: {},
         createdAt: now,
         updatedAt: now,
+        editedAt: 0,
         isDeleted: false,
       },
     };
   });
+}
+
+function handleEditMessage_(body) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const channelId = String(body.channelId || '').trim();
+  const msgId = String(body.msgId || '').trim();
+  const newText = String(body.content == null ? '' : body.content).trim();
+
+  if (!channelId || !msgId) {
+    return { ok: false, error: '缺少必要參數' };
+  }
+
+  return withLock_(function () {
+    const ss = ensureSpreadsheet_();
+    const chInfo = findChannelForMember_(ss, channelId, auth.user.id);
+    if (!chInfo.ok) return chInfo;
+
+    const msgSheet = ss.getSheetByName(SHEETS.MESSAGES);
+    const rows = getDataRows_(msgSheet);
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      if (String(row[0]) !== msgId || String(row[1]) !== channelId) continue;
+
+      if (String(row[3]) !== auth.user.id) {
+        return { ok: false, error: '只能編輯自己發送的訊息' };
+      }
+      if (isTruthy_(row[13])) {
+        return { ok: false, error: '已收回的訊息無法編輯' };
+      }
+
+      const type = String(row[5] || 'text');
+      let updatedContent = '';
+
+      if (type === 'text') {
+        if (!newText) return { ok: false, error: '訊息內容不可為空' };
+        if (newText.length > 2000) return { ok: false, error: '單則訊息最多 2000 字元' };
+        updatedContent = newText;
+      } else if (type === 'image') {
+        if (newText.length > 500) return { ok: false, error: '圖片說明最多 500 字元' };
+        const imgObj = safeJsonParse_(row[6], {});
+        imgObj.caption = newText;
+        updatedContent = JSON.stringify(imgObj);
+      } else {
+        return { ok: false, error: '此類型的訊息無法編輯' };
+      }
+
+      const now = nextVersion_('global_ver');
+      const rowNum = i + 2;
+      msgSheet.getRange(rowNum, 7).setValue(type === 'image' ? updatedContent : toSheetText_(updatedContent));
+      msgSheet.getRange(rowNum, 13).setValue(now);
+      msgSheet.getRange(rowNum, 15).setValue(now);
+
+      setChannelVersion_(channelId, now);
+
+      const updatedRow = row.slice();
+      updatedRow[6] = updatedContent;
+      updatedRow[12] = now;
+      updatedRow[14] = now;
+
+      return {
+        ok: true,
+        message: formatMessageRow_(updatedRow),
+        version: now,
+      };
+    }
+
+    return { ok: false, error: '找不到該訊息' };
+  });
+}
+
+function handleGetImage_(body) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const fileId = String(body.fileId || '').trim();
+  if (!/^[a-zA-Z0-9_-]{10,80}$/.test(fileId)) {
+    return { ok: false, error: '無效的圖片 ID' };
+  }
+
+  const imgFolder = ensureImagesFolder_();
+  const imgFolderId = imgFolder.getId();
+  const file = DriveApp.getFileById(fileId);
+  if (file.isTrashed()) {
+    return { ok: false, error: '圖片已不存在' };
+  }
+
+  // 安全防線：僅允許讀取 messenger_images 資料夾內的圖片
+  let inAllowedFolder = false;
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === imgFolderId) {
+      inAllowedFolder = true;
+      break;
+    }
+  }
+  if (!inAllowedFolder) {
+    return { ok: false, error: '無權存取此檔案' };
+  }
+
+  const blob = file.getBlob();
+  const mime = blob.getContentType() || 'image/webp';
+  const b64 = Utilities.base64Encode(blob.getBytes());
+  return {
+    ok: true,
+    dataUrl: 'data:' + mime + ';base64,' + b64,
+  };
 }
 
 function handleToggleReaction_(body) {
@@ -800,6 +992,7 @@ function getConfig_() {
   return {
     DB_FOLDER_ID: props.getProperty('DB_FOLDER_ID') || DEFAULT_CONFIG.DB_FOLDER_ID,
     SPREADSHEET_NAME: props.getProperty('SPREADSHEET_NAME') || DEFAULT_CONFIG.SPREADSHEET_NAME,
+    IMAGES_FOLDER_NAME: props.getProperty('IMAGES_FOLDER_NAME') || DEFAULT_CONFIG.IMAGES_FOLDER_NAME,
     REGISTER_CODE: (props.getProperty('REGISTER_CODE') !== null)
       ? props.getProperty('REGISTER_CODE')
       : DEFAULT_CONFIG.REGISTER_CODE,
@@ -809,12 +1002,44 @@ function getConfig_() {
   };
 }
 
+function ensureImagesFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const cfg = getConfig_();
+  const savedId = props.getProperty('IMAGES_FOLDER_ID');
+  if (savedId) {
+    try {
+      const existing = DriveApp.getFolderById(savedId);
+      if (!existing.isTrashed()) return existing;
+    } catch (e) {
+      // fallback to lookup/create
+    }
+  }
+
+  if (!cfg.DB_FOLDER_ID || cfg.DB_FOLDER_ID === 'YOUR_GOOGLE_DRIVE_FOLDER_ID') {
+    throw new Error('尚未設定 DB_FOLDER_ID，請先設定你的 Google Drive 資料夾 ID');
+  }
+  const rootFolder = DriveApp.getFolderById(cfg.DB_FOLDER_ID);
+  const subFolders = rootFolder.getFoldersByName(cfg.IMAGES_FOLDER_NAME);
+  let target = null;
+  while (subFolders.hasNext()) {
+    const f = subFolders.next();
+    if (!f.isTrashed()) {
+      target = f;
+      break;
+    }
+  }
+  if (!target) {
+    target = rootFolder.createFolder(cfg.IMAGES_FOLDER_NAME);
+  }
+  props.setProperty('IMAGES_FOLDER_ID', target.getId());
+  return target;
+}
+
 function ensureSpreadsheet_() {
   const props = PropertiesService.getScriptProperties();
   const cfg = getConfig_();
   let ss = null;
 
-  // 1. 優先使用已快取的 SPREADSHEET_ID
   const savedId = props.getProperty('SPREADSHEET_ID');
   if (savedId) {
     try {
@@ -827,7 +1052,6 @@ function ensureSpreadsheet_() {
     }
   }
 
-  // 2. 在指定 Google Drive 資料夾內尋找同名試算表
   if (!ss) {
     if (!cfg.DB_FOLDER_ID || cfg.DB_FOLDER_ID === 'YOUR_GOOGLE_DRIVE_FOLDER_ID') {
       throw new Error('尚未設定 DB_FOLDER_ID，請先設定你的 Google Drive 資料夾 ID');
@@ -842,7 +1066,6 @@ function ensureSpreadsheet_() {
       }
     }
 
-    // 3. 若資料夾裡還沒有，則自動建立試算表並移入指定 Google Drive 資料夾
     if (!ss) {
       ss = SpreadsheetApp.create(cfg.SPREADSHEET_NAME);
       DriveApp.getFileById(ss.getId()).moveTo(folder);
@@ -859,7 +1082,6 @@ function ensureSheetStructure_(ss) {
   const names = [SHEETS.USERS, SHEETS.CHANNELS, SHEETS.MESSAGES];
   const existingSheets = ss.getSheets();
 
-  // 若是全新試算表且只有一張預設工作表（Sheet1 / 工作表1），直接改名為 Users
   if (existingSheets.length === 1 && names.indexOf(existingSheets[0].getName()) === -1) {
     existingSheets[0].setName(SHEETS.USERS);
   }
@@ -870,8 +1092,8 @@ function ensureSheetStructure_(ss) {
     if (!sheet) {
       sheet = ss.insertSheet(name);
     }
+    const cols = HEADERS[name];
     if (sheet.getLastRow() === 0) {
-      const cols = HEADERS[name];
       const headerRange = sheet.getRange(1, 1, 1, cols.length);
       headerRange.setValues([cols]);
       headerRange
@@ -879,6 +1101,16 @@ function ensureSheetStructure_(ss) {
         .setFontColor('#FFFFFF')
         .setFontWeight('bold');
       sheet.setFrozenRows(1);
+    } else if (sheet.getLastColumn() < cols.length) {
+      // 自動無痛補齊新版新增的欄位（例如 Messages.edited_at）
+      const startCol = sheet.getLastColumn() + 1;
+      const missingCols = cols.slice(startCol - 1);
+      const extraRange = sheet.getRange(1, startCol, 1, missingCols.length);
+      extraRange.setValues([missingCols]);
+      extraRange
+        .setBackground('#5B5FC7')
+        .setFontColor('#FFFFFF')
+        .setFontWeight('bold');
     }
   }
 }
@@ -1000,6 +1232,7 @@ function formatMessageRow_(row) {
     reactions: isDeleted ? {} : safeJsonParse_(row[9], {}),
     createdAt: Number(row[10] || 0),
     updatedAt: Number(row[12] || row[10] || 0),
+    editedAt: Number(row[14] || 0),
     isDeleted: isDeleted,
   };
 }
@@ -1123,7 +1356,6 @@ function randomId_(len) {
 }
 
 function generateInviteCode_() {
-  // 排除容易混淆字元 (0/O/1/I)
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
   for (let i = 0; i < 6; i++) {

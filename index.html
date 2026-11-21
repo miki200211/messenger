@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=4" />
+  <link rel="stylesheet" href="css/style.css?v=5" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -153,6 +153,11 @@
         </div>
       </section>
 
+      <!-- 拖曳圖片上傳提示層 -->
+      <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+        <div class="drop-overlay-box">🖼️ 放開滑鼠以上傳圖片</div>
+      </div>
+
       <!-- 訊息流 -->
       <section id="messages-wrapper" class="messages-wrapper hidden">
         <div id="messages-list" class="messages-list" role="log" aria-live="polite"></div>
@@ -169,6 +174,26 @@
             <div id="reply-bar-preview" class="reply-bar-preview"></div>
           </div>
           <button id="cancel-reply-btn" class="icon-btn" type="button" title="取消回覆" aria-label="取消回覆">✕</button>
+        </div>
+
+        <!-- 編輯訊息預覽條 -->
+        <div id="edit-bar" class="reply-bar edit-bar hidden">
+          <div class="reply-bar-accent edit-accent"></div>
+          <div class="reply-bar-content">
+            <div class="reply-bar-title edit-title">✏️ 正在編輯訊息</div>
+            <div id="edit-bar-preview" class="reply-bar-preview"></div>
+          </div>
+          <button id="cancel-edit-btn" class="icon-btn" type="button" title="取消編輯" aria-label="取消編輯">✕</button>
+        </div>
+
+        <!-- 待上傳／貼上的圖片預覽條 -->
+        <div id="image-preview-bar" class="image-preview-bar hidden">
+          <img id="image-preview-thumb" class="image-preview-thumb" alt="圖片預覽" />
+          <div class="image-preview-info">
+            <div id="image-preview-name" class="image-preview-name"></div>
+            <div id="image-preview-meta" class="image-preview-meta"></div>
+          </div>
+          <button id="cancel-image-btn" class="icon-btn" type="button" title="移除圖片" aria-label="移除圖片">✕</button>
         </div>
 
         <!-- Teams 風格貼圖 / 表情選擇器 -->
@@ -197,7 +222,15 @@
               <line x1="15" y1="9" x2="15.01" y2="9"/>
             </svg>
           </button>
-          <textarea id="message-input" rows="1" placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）" maxlength="2000"></textarea>
+          <button id="upload-image-btn" class="icon-btn composer-tool" type="button" title="上傳圖片（也支援 Ctrl+V 貼上或拖曳）" aria-label="上傳圖片">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21 15 16 10 5 21"/>
+            </svg>
+          </button>
+          <input id="image-file-input" type="file" accept="image/*" class="hidden" />
+          <textarea id="message-input" rows="1" placeholder="輸入訊息，或 Ctrl+V 貼上圖片…（Enter 送出）" maxlength="2000"></textarea>
           <button id="send-btn" class="send-btn" type="button" title="送出訊息" aria-label="送出訊息">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -281,9 +314,19 @@
     </div>
   </div>
 
+  <!-- ==================== 圖片大圖檢視 (Lightbox) ==================== -->
+  <div id="lightbox-modal" class="lightbox-modal hidden" role="dialog" aria-modal="true" aria-label="圖片檢視">
+    <div id="lightbox-backdrop" class="lightbox-backdrop"></div>
+    <button id="lightbox-close-btn" class="lightbox-close-btn" type="button" aria-label="關閉">✕</button>
+    <div class="lightbox-content">
+      <img id="lightbox-img" class="lightbox-img" alt="原圖預覽" />
+      <div id="lightbox-caption" class="lightbox-caption hidden"></div>
+    </div>
+  </div>
+
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=4"></script>
+  <script type="module" src="js/app.js?v=5"></script>
 </body>
 </html>
