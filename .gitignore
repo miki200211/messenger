@@ -1,0 +1,10 @@
+# 本地部署專用（內含真實註冊通關碼與私密設定，不可推上公開 GitHub）
+gas/Code.deploy.gs
+*.local.gs
+*.local.js
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

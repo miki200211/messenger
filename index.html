@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Messenger</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- ==================== 登入 / 註冊畫面 ==================== -->
+  <div id="auth-view" class="auth-view">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+            <path d="M4 5a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H9.5L5 20.5V17H7a3 3 0 0 1-3-3V5z"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Messenger</h1>
+          <p class="auth-subtitle">輕量私密頻道聊天室</p>
+        </div>
+      </div>
+
+      <!-- 若尚未在 js/config.js 填入 GAS_URL，顯示快速設定區塊 -->
+      <div id="gas-setup-box" class="gas-setup-box hidden">
+        <label class="field-label" for="gas-url-input">後端 Apps Script 網址 (GAS_URL)</label>
+        <div class="inline-row">
+          <input id="gas-url-input" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" />
+          <button id="save-gas-url-btn" type="button" class="btn btn-secondary">儲存</button>
+        </div>
+        <p class="hint-text">部署完成後也可直接寫入 <code>js/config.js</code>，大家開啟網頁即自動連線。</p>
+      </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button id="tab-login" class="auth-tab active" type="button" role="tab" aria-selected="true">登入</button>
+        <button id="tab-register" class="auth-tab" type="button" role="tab" aria-selected="false">註冊帳號</button>
+      </div>
+
+      <!-- 登入表單 -->
+      <form id="login-form" class="auth-form">
+        <div class="field">
+          <label class="field-label" for="login-username">帳號</label>
+          <input id="login-username" type="text" required autocomplete="username" placeholder="請輸入帳號" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="login-password">密碼</label>
+          <input id="login-password" type="password" required autocomplete="current-password" placeholder="請輸入密碼" />
+        </div>
+        <p id="login-error" class="form-error hidden"></p>
+        <button id="login-submit" class="btn btn-primary btn-block" type="submit">登入</button>
+      </form>
+
+      <!-- 註冊表單 -->
+      <form id="register-form" class="auth-form hidden">
+        <div class="field">
+          <label class="field-label" for="reg-username">帳號（英數 2–24 碼）</label>
+          <input id="reg-username" type="text" required autocomplete="username" placeholder="例如 alex_01" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-displayname">顯示名稱</label>
+          <input id="reg-displayname" type="text" required maxlength="24" placeholder="聊天室中顯示的名字" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-password">密碼（至少 4 碼）</label>
+          <input id="reg-password" type="password" required minlength="4" autocomplete="new-password" placeholder="設定密碼" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-code">註冊通關碼</label>
+          <input id="reg-code" type="password" required autocomplete="off" placeholder="請輸入註冊通關碼" />
+        </div>
+        <p id="reg-error" class="form-error hidden"></p>
+        <button id="reg-submit" class="btn btn-primary btn-block" type="submit">建立帳號並登入</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== 聊天室主畫面 ==================== -->
+  <div id="app-view" class="app-view hidden">
+    <!-- 手機版側邊欄遮罩 -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+
+    <!-- 左側頻道導覽列 -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span>Messenger</span>
+        </div>
+        <button id="theme-toggle-btn" class="icon-btn" type="button" title="切換淺色 / 深色主題" aria-label="切換主題">🌙</button>
+      </div>
+
+      <div class="sidebar-actions">
+        <button id="open-create-channel-btn" class="btn btn-primary btn-sm" type="button">＋ 建立頻道</button>
+        <button id="open-join-channel-btn" class="btn btn-secondary btn-sm" type="button">代碼加入</button>
+      </div>
+
+      <div class="sidebar-section-title">我的頻道</div>
+      <nav id="channel-list" class="channel-list" aria-label="頻道列表"></nav>
+
+      <div class="sidebar-footer">
+        <div class="me-info">
+          <div id="me-avatar" class="avatar avatar-sm"></div>
+          <div class="me-text">
+            <div id="me-name" class="me-name"></div>
+            <div id="me-username" class="me-username"></div>
+          </div>
+        </div>
+        <button id="logout-btn" class="icon-btn" type="button" title="登出" aria-label="登出">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 右側主聊天視窗 -->
+    <main class="chat-main">
+      <!-- 頂部頻道資訊欄 -->
+      <header class="chat-header">
+        <div class="chat-header-left">
+          <button id="mobile-menu-btn" class="icon-btn mobile-only" type="button" aria-label="開啟頻道選單">☰</button>
+          <div class="chat-title-wrap">
+            <h2 id="current-channel-name" class="chat-title">選擇或建立頻道</h2>
+            <button id="channel-members-btn" class="member-pill hidden" type="button" title="檢視頻道成員"></button>
+          </div>
+        </div>
+        <div class="chat-header-right">
+          <!-- 僅頻道建立者可見的邀請碼區塊 -->
+          <div id="owner-invite-bar" class="invite-pill hidden">
+            <span class="invite-label">邀請碼</span>
+            <code id="owner-invite-code" class="invite-code"></code>
+            <button id="copy-invite-btn" class="mini-btn" type="button" title="複製邀請碼">複製</button>
+            <button id="reset-invite-btn" class="mini-btn" type="button" title="重新產生邀請碼">重設</button>
+          </div>
+          <span id="sync-status" class="sync-status" title="同步狀態">
+            <span class="status-dot"></span>
+          </span>
+        </div>
+      </header>
+
+      <!-- 無頻道時的引導畫面 -->
+      <section id="empty-state" class="empty-state">
+        <div class="empty-card">
+          <div class="empty-emoji">💬</div>
+          <h3>歡迎來到 Messenger</h3>
+          <p>你可以建立一個新的私密頻道，並把邀請碼分享給朋友；或輸入朋友的邀請碼加入對話。</p>
+          <div class="empty-actions">
+            <button id="empty-create-btn" class="btn btn-primary" type="button">＋ 建立頻道</button>
+            <button id="empty-join-btn" class="btn btn-secondary" type="button">輸入邀請碼加入</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 訊息流 -->
+      <section id="messages-wrapper" class="messages-wrapper hidden">
+        <div id="messages-list" class="messages-list" role="log" aria-live="polite"></div>
+        <button id="scroll-bottom-btn" class="scroll-bottom-btn hidden" type="button">↓ 新訊息</button>
+      </section>
+
+      <!-- 底部輸入與貼圖面板 -->
+      <footer id="composer-area" class="composer-area hidden">
+        <!-- 回覆引用預覽條 -->
+        <div id="reply-bar" class="reply-bar hidden">
+          <div class="reply-bar-accent"></div>
+          <div class="reply-bar-content">
+            <div class="reply-bar-title">回覆 <strong id="reply-bar-sender"></strong></div>
+            <div id="reply-bar-preview" class="reply-bar-preview"></div>
+          </div>
+          <button id="cancel-reply-btn" class="icon-btn" type="button" title="取消回覆" aria-label="取消回覆">✕</button>
+        </div>
+
+        <!-- Teams 風格貼圖 / 表情選擇器 -->
+        <div id="sticker-popover" class="sticker-popover hidden" role="dialog" aria-label="貼圖與表情">
+          <div class="popover-header">
+            <div class="popover-tabs">
+              <button id="picker-tab-sticker" class="popover-tab active" type="button">Teams 貼圖</button>
+              <button id="picker-tab-emoji" class="popover-tab" type="button">插入表情</button>
+            </div>
+            <button id="close-picker-btn" class="icon-btn icon-btn-xs" type="button" aria-label="關閉">✕</button>
+          </div>
+          <div id="picker-body" class="popover-body"></div>
+        </div>
+
+        <!-- 額外表情回應選擇器（按 + 時定位彈出） -->
+        <div id="reaction-picker" class="reaction-picker hidden" role="dialog" aria-label="更多表情回應"></div>
+
+        <!-- 輸入列 -->
+        <div class="composer-box">
+          <button id="toggle-sticker-btn" class="icon-btn composer-tool" type="button" title="Teams 貼圖與表情" aria-label="貼圖與表情">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+              <line x1="9" y1="9" x2="9.01" y2="9"/>
+              <line x1="15" y1="9" x2="15.01" y2="9"/>
+            </svg>
+          </button>
+          <textarea id="message-input" rows="1" placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）" maxlength="2000"></textarea>
+          <button id="send-btn" class="send-btn" type="button" title="送出訊息" aria-label="送出訊息">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ==================== 彈窗：建立頻道 ==================== -->
+  <div id="modal-create-channel" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>建立新頻道</h3>
+        <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
+      </div>
+      <form id="create-channel-form" class="modal-body">
+        <div class="field">
+          <label class="field-label" for="new-channel-name">頻道名稱</label>
+          <input id="new-channel-name" type="text" required maxlength="30" placeholder="例如：專案討論、午餐團" />
+        </div>
+        <p class="hint-text">建立後會自動產生一組專屬 6 碼邀請碼，其他人需輸入此代碼才能加入。</p>
+        <p id="create-channel-error" class="form-error hidden"></p>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close" type="button">取消</button>
+          <button id="create-channel-submit" class="btn btn-primary" type="submit">建立</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗：輸入邀請碼加入 ==================== -->
+  <div id="modal-join-channel" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>輸入邀請碼加入頻道</h3>
+        <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
+      </div>
+      <form id="join-channel-form" class="modal-body">
+        <div class="field">
+          <label class="field-label" for="join-channel-code">建立者的頻道邀請碼</label>
+          <input id="join-channel-code" type="text" required maxlength="12" placeholder="例如：K7M9P2" class="code-input" autocomplete="off" />
+        </div>
+        <p id="join-channel-error" class="form-error hidden"></p>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close" type="button">取消</button>
+          <button id="join-channel-submit" class="btn btn-primary" type="submit">加入頻道</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== 彈窗：頻道成員資訊 ==================== -->
+  <div id="modal-channel-info" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="info-channel-title">頻道資訊</h3>
+        <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="info-row">
+          <span class="info-label">建立者</span>
+          <span id="info-channel-owner"></span>
+        </div>
+        <div id="info-invite-row" class="info-row hidden">
+          <span class="info-label">邀請碼</span>
+          <div class="inline-row">
+            <code id="info-invite-code" class="invite-code"></code>
+            <button id="info-copy-invite-btn" class="mini-btn" type="button">複製</button>
+          </div>
+        </div>
+        <div class="info-members-block">
+          <div class="info-label">頻道成員</div>
+          <ul id="info-members-list" class="members-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 通知 -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
