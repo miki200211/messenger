@@ -1,20 +1,21 @@
-import { CONFIG, getGasUrl } from './config.js?v=3';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=3';
+import { CONFIG, getGasUrl } from './config.js?v=4';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=4';
 import {
+  EMOJI_CATEGORIES,
   EMOJI_LIST,
   QUICK_EMOJIS,
   getEmojiById,
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=3';
+} from './emojis.js?v=4';
 import {
   isNotifyEnabled,
   getNotifyPermission,
   toggleNotifications,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=3';
+} from './notify.js?v=4';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -40,6 +41,7 @@ const state = {
   unreadTitleCount: 0,
   replyTarget: null,            // { id, senderName, type, preview }
   pickerMode: 'sticker',
+  pickerCategory: '全部',
   reactionPickerMsgId: null,
   pollTimer: null,
   syncInFlight: false,
@@ -107,6 +109,7 @@ const els = {
   pickerTabSticker: $('picker-tab-sticker'),
   pickerTabEmoji: $('picker-tab-emoji'),
   closePickerBtn: $('close-picker-btn'),
+  pickerCats: $('picker-cats'),
   pickerBody: $('picker-body'),
   reactionPicker: $('reaction-picker'),
 
@@ -1373,22 +1376,46 @@ function renderStickerPopover() {
   const isSticker = state.pickerMode === 'sticker';
   els.pickerTabSticker.classList.toggle('active', isSticker);
   els.pickerTabEmoji.classList.toggle('active', !isSticker);
+
+  // 分類切換列
+  els.pickerCats.textContent = '';
+  const tabs = ['全部', ...EMOJI_CATEGORIES];
+  for (const cat of tabs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'picker-cat-btn' + (state.pickerCategory === cat ? ' active' : '');
+    btn.textContent = cat;
+    btn.addEventListener('click', () => {
+      state.pickerCategory = cat;
+      renderStickerPopover();
+      els.pickerBody.scrollTop = 0;
+    });
+    els.pickerCats.appendChild(btn);
+  }
+
   els.pickerBody.textContent = '';
+  const selectedCats = state.pickerCategory === '全部'
+    ? EMOJI_CATEGORIES
+    : [state.pickerCategory];
 
   if (isSticker) {
-    const recentIds = getRecentStickerIds();
-    if (recentIds.length > 0) {
-      appendStickerSection('最近使用', recentIds.map((id) => getEmojiById(id)));
+    if (state.pickerCategory === '全部') {
+      const recentIds = getRecentStickerIds();
+      if (recentIds.length > 0) {
+        appendStickerSection('最近使用', recentIds.map((id) => getEmojiById(id)));
+      }
     }
-    const categories = ['常用', '回應', '情緒', '氣氛'];
-    for (const cat of categories) {
+    for (const cat of selectedCats) {
       const items = EMOJI_LIST.filter((e) => e.cat === cat);
       appendStickerSection(cat, items);
     }
   } else {
+    const items = state.pickerCategory === '全部'
+      ? EMOJI_LIST
+      : EMOJI_LIST.filter((e) => e.cat === state.pickerCategory);
     const grid = document.createElement('div');
     grid.className = 'emoji-grid';
-    for (const emoji of EMOJI_LIST) {
+    for (const emoji of items) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'emoji-tile';

@@ -1122,9 +1122,9 @@ button {
   position: absolute;
   left: 18px;
   bottom: calc(100% + 2px);
-  width: 360px;
+  width: 396px;
   max-width: calc(100vw - 36px);
-  max-height: 360px;
+  max-height: 420px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1156,6 +1156,39 @@ button {
 }
 .popover-tab.active {
   background: var(--accent-soft);
+  color: var(--accent);
+}
+.picker-cats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.picker-cats::-webkit-scrollbar {
+  display: none;
+}
+.picker-cat-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.picker-cat-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+.picker-cat-btn.active {
+  background: var(--accent-soft);
+  border-color: rgba(91, 95, 199, 0.3);
   color: var(--accent);
 }
 .popover-body {
