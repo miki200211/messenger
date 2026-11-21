@@ -90,7 +90,7 @@
       <nav id="channel-list" class="channel-list" aria-label="頻道列表"></nav>
 
       <div class="sidebar-footer">
-        <button id="open-avatar-modal-btn" class="me-info me-info-btn" type="button" title="點擊更換頭像">
+        <button id="open-avatar-modal-btn" class="me-info me-info-btn" type="button" title="點擊修改名稱與頭像">
           <div class="me-avatar-wrap">
             <div id="me-avatar" class="avatar avatar-sm"></div>
             <span class="me-avatar-edit-dot" aria-hidden="true">✎</span>
@@ -337,28 +337,33 @@
     </div>
   </div>
 
-  <!-- ==================== 彈窗：更換頭像 ==================== -->
-  <div id="modal-avatar" class="modal hidden" role="dialog" aria-modal="true" aria-label="更換個人頭像">
+  <!-- ==================== 彈窗：個人資料與頭像設定 ==================== -->
+  <div id="modal-avatar" class="modal hidden" role="dialog" aria-modal="true" aria-label="個人資料設定">
     <div class="modal-backdrop"></div>
     <div class="modal-card">
       <div class="modal-header">
-        <h3>更換個人頭像</h3>
+        <h3>個人資料設定</h3>
         <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
       </div>
       <div class="modal-body">
+        <div class="field">
+          <label class="field-label" for="profile-displayname-input">顯示名稱</label>
+          <input id="profile-displayname-input" type="text" maxlength="24" placeholder="輸入聊天室顯示的名稱" />
+        </div>
         <div class="avatar-modal-top">
           <div id="avatar-modal-preview" class="avatar avatar-lg"></div>
           <div class="avatar-upload-col">
             <button id="avatar-upload-btn" class="btn btn-secondary btn-sm" type="button">選擇圖片</button>
             <input id="avatar-file-input" type="file" accept="image/*" class="hidden" />
-            <p class="hint-text">預覽滿意後再按下方「儲存頭像」（支援 JPG / PNG / WebP / GIF）</p>
+            <p class="hint-text">預覽滿意後再按下方「儲存設定」（支援 JPG / PNG / WebP / GIF）</p>
           </div>
         </div>
         <div class="info-label" style="margin-top: 14px;">或選擇預設頭像</div>
         <div id="avatar-preset-grid" class="avatar-preset-grid"></div>
+        <p id="profile-save-error" class="form-error hidden" style="margin-top: 10px;"></p>
         <div class="modal-footer">
           <button class="btn btn-secondary modal-close" type="button">取消</button>
-          <button id="avatar-save-btn" class="btn btn-primary" type="button" disabled>儲存頭像</button>
+          <button id="avatar-save-btn" class="btn btn-primary" type="button" disabled>儲存設定</button>
         </div>
       </div>
     </div>
@@ -377,6 +382,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=13"></script>
+  <script type="module" src="js/app.js?v=14"></script>
 </body>
 </html>

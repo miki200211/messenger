@@ -2,7 +2,7 @@
  * 瀏覽器桌面通知（跳出視窗）與 Web Audio 提示音模組
  * 零外部音檔相依，使用 Web Notifications API + Web Audio API。
  */
-import { CONFIG } from './config.js?v=13';
+import { CONFIG } from './config.js?v=14';
 
 const NOTIFY_KEY = CONFIG.STORAGE_PREFIX + 'notify_enabled';
 

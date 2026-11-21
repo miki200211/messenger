@@ -174,7 +174,8 @@ function doPost(e) {
       case 'getImage':
         return jsonOut_(handleGetImage_(body));
       case 'updateAvatar':
-        return jsonOut_(handleUpdateAvatar_(body));
+      case 'updateProfile':
+        return jsonOut_(handleUpdateProfile_(body));
       default:
         return jsonOut_({ ok: false, error: '不支援的操作：' + action });
     }
@@ -318,12 +319,22 @@ function handleMe_(body) {
   return { ok: true, user: auth.user };
 }
 
-function handleUpdateAvatar_(body) {
+function handleUpdateProfile_(body) {
   const auth = requireAuth_(body.token);
   if (!auth.ok) return auth;
 
-  const mode = String(body.mode || 'preset').trim();
-  let avatarValue = '';
+  const hasNameUpdate = body.displayName !== undefined && body.displayName !== null;
+  let newDisplayName = auth.user.displayName;
+  if (hasNameUpdate) {
+    newDisplayName = String(body.displayName).trim();
+    if (newDisplayName.length < 1 || newDisplayName.length > 24) {
+      return { ok: false, error: '名稱長度需為 1–24 字元' };
+    }
+  }
+
+  const mode = String(body.mode || '').trim();
+  let hasAvatarUpdate = false;
+  let avatarValue = auth.user.avatar || '';
 
   if (mode === 'preset') {
     const preset = String(body.preset || '').trim();
@@ -331,6 +342,7 @@ function handleUpdateAvatar_(body) {
       return { ok: false, error: '不支援的預設頭像' };
     }
     avatarValue = preset === 'initial' ? '' : ('preset:' + preset);
+    hasAvatarUpdate = true;
   } else if (mode === 'upload') {
     const mime = String(body.imageMime || '').trim().toLowerCase();
     const ext = ALLOWED_IMAGE_MIMES[mime];
@@ -359,7 +371,8 @@ function handleUpdateAvatar_(body) {
       // 限制分享時前端會自動透過 getImage 載入
     }
     avatarValue = 'drive:' + file.getId();
-  } else {
+    hasAvatarUpdate = true;
+  } else if (mode !== '') {
     return { ok: false, error: '不支援的頭像更新方式' };
   }
 
@@ -372,12 +385,22 @@ function handleUpdateAvatar_(body) {
       if (String(rows[i][0]) !== auth.user.id) continue;
 
       const rowNum = i + 2;
-      sheet.getRange(rowNum, 11).setValue(toSheetText_(avatarValue));
+      const oldDisplayName = String(rows[i][2] || '');
+      const nameChanged = hasNameUpdate && newDisplayName !== oldDisplayName;
+
+      if (nameChanged) {
+        sheet.getRange(rowNum, 3).setValue(toSheetText_(newDisplayName));
+      }
+      if (hasAvatarUpdate) {
+        sheet.getRange(rowNum, 11).setValue(toSheetText_(avatarValue));
+      } else {
+        avatarValue = String(rows[i][10] || '');
+      }
 
       const updatedUser = {
         id: auth.user.id,
         username: auth.user.username,
-        displayName: auth.user.displayName,
+        displayName: nameChanged ? newDisplayName : oldDisplayName,
         avatarColor: auth.user.avatarColor,
         avatar: avatarValue,
       };
@@ -385,12 +408,38 @@ function handleUpdateAvatar_(body) {
       cacheUserToken_(String(body.token || '').trim(), updatedUser, expireAt);
       clearUserProfilesCache_();
 
+      const freshProfiles = getAllUserProfiles_(ss);
       const now = nextVersion_('global_ver');
+
+      // 若名稱有變更，同步刷新 Channels 表的 owner_name 與 member_names 保持後台試算表一致
+      if (nameChanged) {
+        const chSheet = ss.getSheetByName(SHEETS.CHANNELS);
+        const chRows = getDataRows_(chSheet);
+        for (let c = 0; c < chRows.length; c++) {
+          const chRow = chRows[c];
+          const members = safeJsonParse_(chRow[5], []);
+          const isOwner = String(chRow[3]) === auth.user.id;
+          const isMember = members.indexOf(auth.user.id) !== -1;
+          if (!isOwner && !isMember) continue;
+
+          const chRowNum = c + 2;
+          if (isOwner) {
+            chSheet.getRange(chRowNum, 5).setValue(toSheetText_(updatedUser.displayName));
+          }
+          const updatedNames = members.map(function (uid) {
+            return (freshProfiles[uid] && freshProfiles[uid].displayName) ? freshProfiles[uid].displayName : uid;
+          });
+          chSheet.getRange(chRowNum, 7).setValue(toSheetText_(updatedNames.join(', ')));
+          chSheet.getRange(chRowNum, 10).setValue(now);
+        }
+      }
+
       return {
         ok: true,
         user: updatedUser,
         avatar: avatarValue,
-        userProfiles: getAllUserProfiles_(ss),
+        userProfiles: freshProfiles,
+        channels: nameChanged ? listUserChannels_(ss, auth.user.id) : undefined,
         globalVersion: now,
       };
     }
