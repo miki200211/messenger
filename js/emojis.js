@@ -3,7 +3,7 @@
  * 透過 jsDelivr CDN 載入開源 @lobehub/fluent-emoji-3d（WebP 極致輕量），
  * 並內建多層備援與原生 Unicode Emoji 降級，保證永不破圖。
  */
-import { CONFIG } from './config.js?v=10';
+import { CONFIG } from './config.js?v=12';
 
 const CDN_BASES = [
   'https://cdn.jsdelivr.net/npm/@lobehub/fluent-emoji-3d/assets/',
