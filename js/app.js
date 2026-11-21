@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl, setLocalGasUrl } from './config.js';
-import { apiPost, setUnauthorizedHandler } from './api.js';
+import { CONFIG, getGasUrl } from './config.js?v=2';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=2';
 import {
   EMOJI_LIST,
   QUICK_EMOJIS,
@@ -7,7 +7,7 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js';
+} from './emojis.js?v=2';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -43,9 +43,6 @@ const $ = (id) => document.getElementById(id);
 const els = {
   authView: $('auth-view'),
   appView: $('app-view'),
-  gasSetupBox: $('gas-setup-box'),
-  gasUrlInput: $('gas-url-input'),
-  saveGasUrlBtn: $('save-gas-url-btn'),
 
   tabLogin: $('tab-login'),
   tabRegister: $('tab-register'),
@@ -141,8 +138,6 @@ async function init() {
     showToast(msg || '請重新登入', 'error');
   });
 
-  updateGasSetupVisibility();
-
   const saved = loadJson(SESSION_KEY, null);
   if (saved && saved.token && saved.user && getGasUrl()) {
     state.token = saved.token;
@@ -176,28 +171,8 @@ function applyTheme(theme) {
   els.themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 
-function updateGasSetupVisibility() {
-  const hasUrl = Boolean(getGasUrl());
-  els.gasSetupBox.classList.toggle('hidden', hasUrl);
-  if (!hasUrl) {
-    els.gasUrlInput.value = '';
-  }
-}
-
 // ==================== 事件綁定 ====================
 function bindEvents() {
-  // GAS URL 本機設定
-  els.saveGasUrlBtn.addEventListener('click', () => {
-    const url = els.gasUrlInput.value.trim();
-    if (!url.startsWith('https://')) {
-      showToast('請輸入有效的 https:// Apps Script 網址', 'error');
-      return;
-    }
-    setLocalGasUrl(url);
-    updateGasSetupVisibility();
-    showToast('已儲存後端網址，現在可以登入或註冊！', 'success');
-  });
-
   // 登入 / 註冊切換
   els.tabLogin.addEventListener('click', () => switchAuthTab('login'));
   els.tabRegister.addEventListener('click', () => switchAuthTab('register'));
@@ -407,7 +382,6 @@ function showAuthView() {
   stopPolling();
   els.appView.classList.add('hidden');
   els.authView.classList.remove('hidden');
-  updateGasSetupVisibility();
 }
 
 function enterAppView() {

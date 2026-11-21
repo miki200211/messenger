@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=2" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -21,16 +21,6 @@
           <h1>Messenger</h1>
           <p class="auth-subtitle">輕量私密頻道聊天室</p>
         </div>
-      </div>
-
-      <!-- 若尚未在 js/config.js 填入 GAS_URL，顯示快速設定區塊 -->
-      <div id="gas-setup-box" class="gas-setup-box hidden">
-        <label class="field-label" for="gas-url-input">後端 Apps Script 網址 (GAS_URL)</label>
-        <div class="inline-row">
-          <input id="gas-url-input" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" />
-          <button id="save-gas-url-btn" type="button" class="btn btn-secondary">儲存</button>
-        </div>
-        <p class="hint-text">部署完成後也可直接寫入 <code>js/config.js</code>，大家開啟網頁即自動連線。</p>
       </div>
 
       <div class="auth-tabs" role="tablist">
@@ -285,6 +275,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=2"></script>
 </body>
 </html>
