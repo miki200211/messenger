@@ -413,7 +413,9 @@ function bindEvents() {
   els.lightboxBackdrop.addEventListener('click', closeLightbox);
   els.lightboxCloseBtn.addEventListener('click', closeLightbox);
 
-  // 貼圖 / 表情面板
+  // 貼圖 / 表情面板（阻止面板內點擊冒泡到 document 誤觸外部關閉）
+  els.stickerPopover.addEventListener('click', (e) => e.stopPropagation());
+  els.reactionPicker.addEventListener('click', (e) => e.stopPropagation());
   els.toggleStickerBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleStickerPopover();
@@ -2071,7 +2073,8 @@ function renderStickerPopover() {
     btn.type = 'button';
     btn.className = 'picker-cat-btn' + (state.pickerCategory === cat ? ' active' : '');
     btn.textContent = cat;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       state.pickerCategory = cat;
       renderStickerPopover();
       els.pickerBody.scrollTop = 0;
