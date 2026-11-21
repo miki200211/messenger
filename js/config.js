@@ -4,7 +4,7 @@
  * 格式範例：https://script.google.com/macros/s/AKfycbxxxxxxxxxxxxxxxxxxxx/exec
  */
 export const CONFIG = {
-  GAS_URL: '',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxfC8kcBsN24v6Zbh6zxqmZtmdMRgViU6I-uEDFyiwJBz2Cl1sjFEhDLUrBepAkT9BvtA/exec',
   ACTIVE_POLL_MS: 2500,   // 分頁開啟中輪詢間隔 (ms)
   HIDDEN_POLL_MS: 20000,  // 切換至背景時降頻間隔 (ms)
   STORAGE_PREFIX: 'messenger_v1_',
