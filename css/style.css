@@ -572,6 +572,47 @@ button {
   display: inline-flex;
   align-items: center;
 }
+.notify-btn {
+  position: relative;
+}
+.notify-btn .notify-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 2px var(--bg-surface);
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.notify-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.notify-btn.active .notify-dot {
+  opacity: 1;
+  transform: scale(1);
+}
+.notify-btn.denied {
+  color: var(--danger);
+  opacity: 0.75;
+}
+.notify-btn.ringing .bell-icon {
+  animation: bell-ring 0.65s ease;
+  transform-origin: 50% 15%;
+}
+@keyframes bell-ring {
+  0%   { transform: rotate(0deg); }
+  15%  { transform: rotate(16deg); }
+  30%  { transform: rotate(-14deg); }
+  45%  { transform: rotate(11deg); }
+  60%  { transform: rotate(-8deg); }
+  75%  { transform: rotate(4deg); }
+  100% { transform: rotate(0deg); }
+}
 .status-dot {
   width: 8px;
   height: 8px;

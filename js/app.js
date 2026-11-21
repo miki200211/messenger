@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=2';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=2';
+import { CONFIG, getGasUrl } from './config.js?v=3';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=3';
 import {
   EMOJI_LIST,
   QUICK_EMOJIS,
@@ -7,7 +7,14 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=2';
+} from './emojis.js?v=3';
+import {
+  isNotifyEnabled,
+  getNotifyPermission,
+  toggleNotifications,
+  notifyIncomingMessage,
+  unlockAudio,
+} from './notify.js?v=3';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -27,8 +34,10 @@ const state = {
   currentChannelId: null,
   messagesByChannel: new Map(), // channelId -> Map<msgId, msg>
   channelVersion: new Map(),    // channelId -> number (僅由 syncMessages 更新)
+  channelLastMsgAt: new Map(),  // channelId -> number (追蹤其他頻道新訊息通知)
   globalVersion: 0,
   lastRead: loadJson(READ_KEY, {}),
+  unreadTitleCount: 0,
   replyTarget: null,            // { id, senderName, type, preview }
   pickerMode: 'sticker',
   reactionPickerMsgId: null,
@@ -77,6 +86,7 @@ const els = {
   ownerInviteCode: $('owner-invite-code'),
   copyInviteBtn: $('copy-invite-btn'),
   resetInviteBtn: $('reset-invite-btn'),
+  notifyToggleBtn: $('notify-toggle-btn'),
   syncStatus: $('sync-status'),
 
   emptyState: $('empty-state'),
@@ -131,6 +141,7 @@ init();
 
 async function init() {
   initTheme();
+  renderNotifyBell();
   bindEvents();
   setUnauthorizedHandler((msg) => {
     clearSession();
@@ -171,8 +182,46 @@ function applyTheme(theme) {
   els.themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 
+function renderNotifyBell() {
+  const on = isNotifyEnabled();
+  const perm = getNotifyPermission();
+  els.notifyToggleBtn.classList.toggle('active', on);
+  els.notifyToggleBtn.classList.toggle('denied', perm === 'denied');
+  if (perm === 'denied') {
+    els.notifyToggleBtn.title = '通知已被瀏覽器封鎖（請點網址列左側圖示允許通知）';
+  } else if (on) {
+    els.notifyToggleBtn.title = '訊息跳出通知已開啟（點擊關閉）';
+  } else {
+    els.notifyToggleBtn.title = '點擊開啟瀏覽器跳出通知與提示音';
+  }
+}
+
+function ringBellIcon() {
+  els.notifyToggleBtn.classList.remove('ringing');
+  void els.notifyToggleBtn.offsetWidth;
+  els.notifyToggleBtn.classList.add('ringing');
+  setTimeout(() => els.notifyToggleBtn.classList.remove('ringing'), 700);
+}
+
+function clearUnreadTitle() {
+  state.unreadTitleCount = 0;
+  document.title = 'Messenger';
+}
+
 // ==================== 事件綁定 ====================
 function bindEvents() {
+  // 首次互動解鎖瀏覽器音效播放權限
+  document.addEventListener('pointerdown', () => unlockAudio(), { once: true });
+
+  // 鈴鐺通知開關
+  els.notifyToggleBtn.addEventListener('click', async () => {
+    const result = await toggleNotifications();
+    renderNotifyBell();
+    if (result.enabled) ringBellIcon();
+    if (result.message) showToast(result.message, result.type);
+    scheduleNextPoll();
+  });
+
   // 登入 / 註冊切換
   els.tabLogin.addEventListener('click', () => switchAuthTab('login'));
   els.tabRegister.addEventListener('click', () => switchAuthTab('register'));
@@ -292,13 +341,25 @@ function bindEvents() {
     if (state.replyTarget) clearReplyTarget();
   });
 
-  // 分頁背景 / 前景智慧切換輪詢頻率
+  // 分頁背景 / 前景智慧切換輪詢頻率，回到前景清除未讀標題
   document.addEventListener('visibilitychange', () => {
     if (!state.token) return;
     if (document.visibilityState === 'visible') {
+      clearUnreadTitle();
+      markCurrentChannelRead();
+      renderChannelList();
       syncNow();
     } else {
       scheduleNextPoll();
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    if (!state.token) return;
+    clearUnreadTitle();
+    if (isNearBottom()) {
+      markCurrentChannelRead();
+      renderChannelList();
     }
   });
 }
@@ -405,6 +466,9 @@ async function loadInitialData() {
   const res = await apiPost('getChannels', {}, { token: state.token });
   state.channels = res.channels || [];
   state.globalVersion = Number(res.globalVersion || 0);
+  for (const ch of state.channels) {
+    state.channelLastMsgAt.set(ch.id, Number(ch.lastMessageAt || 0));
+  }
   renderChannelList();
 
   const lastId = localStorage.getItem(LAST_CHANNEL_KEY);
@@ -534,6 +598,7 @@ async function handleCreateChannel(e) {
   try {
     const res = await apiPost('createChannel', { name }, { token: state.token });
     state.channels.unshift(res.channel);
+    state.channelLastMsgAt.set(res.channel.id, Number(res.channel.lastMessageAt || 0));
     closeModal(els.modalCreateChannel);
     showToast(`頻道「${res.channel.name}」已建立！邀請碼：${res.channel.inviteCode}`, 'success');
     await selectChannel(res.channel.id);
@@ -557,6 +622,7 @@ async function handleJoinChannel(e) {
     const exists = state.channels.some((c) => c.id === res.channel.id);
     if (!exists) {
       state.channels.unshift(res.channel);
+      state.channelLastMsgAt.set(res.channel.id, Number(res.channel.lastMessageAt || 0));
     }
     closeModal(els.modalJoinChannel);
     showToast(
@@ -659,8 +725,11 @@ function stopPolling() {
 function scheduleNextPoll() {
   if (state.pollTimer) clearTimeout(state.pollTimer);
   if (!state.token) return;
+  const hiddenDelay = isNotifyEnabled()
+    ? CONFIG.NOTIFY_HIDDEN_POLL_MS
+    : CONFIG.HIDDEN_POLL_MS;
   const delay = document.visibilityState === 'hidden'
-    ? CONFIG.HIDDEN_POLL_MS
+    ? hiddenDelay
     : CONFIG.ACTIVE_POLL_MS;
   state.pollTimer = setTimeout(() => syncNow(), delay);
 }
@@ -692,13 +761,22 @@ async function syncNow() {
     setSyncIndicator('ok');
 
     if (res.hasChanges) {
+      const updatedOtherChannels = [];
       if (Array.isArray(res.channels)) {
+        for (const ch of res.channels) {
+          const prevTs = state.channelLastMsgAt.get(ch.id);
+          const nextTs = Number(ch.lastMessageAt || 0);
+          if (sinceGlobal > 0 && ch.id !== targetChannelId && prevTs !== undefined && nextTs > prevTs) {
+            updatedOtherChannels.push(ch);
+          }
+          state.channelLastMsgAt.set(ch.id, nextTs);
+        }
         state.channels = res.channels;
         renderCurrentChannelView();
       }
 
       const wasAtBottom = isNearBottom();
-      let receivedNewMsgFromOther = false;
+      const incomingFromOthers = [];
 
       if (targetChannelId && Array.isArray(res.messages)) {
         const msgMap = getChannelMsgMap(targetChannelId);
@@ -707,8 +785,8 @@ async function syncNow() {
         for (const msg of res.messages) {
           const existed = msgMap.has(msg.id);
           msgMap.set(msg.id, msg);
-          if (!isFirstLoad && !existed && msg.senderId !== state.user.id) {
-            receivedNewMsgFromOther = true;
+          if (!isFirstLoad && !existed && !msg.isDeleted && msg.senderId !== state.user.id) {
+            incomingFromOthers.push(msg);
           }
         }
 
@@ -718,9 +796,49 @@ async function syncNow() {
 
         if (res.messages.length > 0 || isFirstLoad) {
           renderMessages({ forceScrollBottom: isFirstLoad || wasAtBottom });
-          if (receivedNewMsgFromOther && !wasAtBottom) {
+          if (incomingFromOthers.length > 0 && !wasAtBottom) {
             els.scrollBottomBtn.classList.remove('hidden');
           }
+        }
+      }
+
+      // 觸發鈴鐺與瀏覽器跳出視窗通知
+      const isUnfocused = document.visibilityState === 'hidden' || !document.hasFocus();
+      if (incomingFromOthers.length > 0) {
+        const last = incomingFromOthers[incomingFromOthers.length - 1];
+        const ch = getCurrentChannel();
+        const chName = ch ? ch.name : 'Messenger';
+        const body = last.type === 'sticker'
+          ? `[貼圖] ${getEmojiById(last.content).label}`
+          : last.content.slice(0, 80);
+
+        ringBellIcon();
+        notifyIncomingMessage({
+          title: `${last.senderName}（# ${chName}）`,
+          body,
+          tag: `ch-${targetChannelId}`,
+          popup: true,
+          onClick: () => scrollToBottom(true),
+        });
+
+        if (isUnfocused) {
+          state.unreadTitleCount += incomingFromOthers.length;
+          document.title = `(${state.unreadTitleCount}) 新訊息 - Messenger`;
+        }
+      } else if (updatedOtherChannels.length > 0) {
+        const ch = updatedOtherChannels[0];
+        ringBellIcon();
+        notifyIncomingMessage({
+          title: `# ${ch.name}`,
+          body: '收到新訊息，點擊切換查看',
+          tag: `ch-${ch.id}`,
+          popup: true,
+          onClick: () => selectChannel(ch.id),
+        });
+
+        if (isUnfocused) {
+          state.unreadTitleCount += updatedOtherChannels.length;
+          document.title = `(${state.unreadTitleCount}) 新訊息 - Messenger`;
         }
       }
 
@@ -728,7 +846,7 @@ async function syncNow() {
         state.globalVersion = Math.max(state.globalVersion, Number(res.globalVersion));
       }
 
-      if (wasAtBottom && document.visibilityState === 'visible') {
+      if (wasAtBottom && document.visibilityState === 'visible' && document.hasFocus()) {
         markCurrentChannelRead();
       }
       renderChannelList();
@@ -1137,6 +1255,7 @@ async function sendPayload(type, content) {
     );
     msgMap.delete(tempId);
     msgMap.set(res.message.id, res.message);
+    state.channelLastMsgAt.set(channelId, Number(res.message.createdAt || Date.now()));
     markCurrentChannelRead();
     if (state.currentChannelId === channelId) {
       renderMessages({ forceScrollBottom: true });
@@ -1440,7 +1559,9 @@ function clearSession() {
   state.currentChannelId = null;
   state.messagesByChannel.clear();
   state.channelVersion.clear();
+  state.channelLastMsgAt.clear();
   state.globalVersion = 0;
+  clearUnreadTitle();
   localStorage.removeItem(SESSION_KEY);
 }
 
