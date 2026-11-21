@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=5';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=5';
+import { CONFIG, getGasUrl } from './config.js?v=6';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=6';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,22 +8,27 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=5';
+} from './emojis.js?v=6';
 import {
   isNotifyEnabled,
   getNotifyPermission,
   toggleNotifications,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=5';
+} from './notify.js?v=6';
 import {
   parseImageContent,
   processImageFile,
+  processAvatarFile,
   createDriveImageEl,
   cacheImageDataUrl,
   getCachedImageDataUrl,
   formatBytes,
-} from './images.js?v=5';
+} from './images.js?v=6';
+import {
+  AVATAR_PRESETS,
+  renderAvatarEl,
+} from './avatars.js?v=6';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -39,6 +44,7 @@ const AVATAR_PALETTE = [
 const state = {
   token: '',
   user: null,
+  userProfiles: {},             // userId -> { displayName, avatarColor, avatar }
   channels: [],
   currentChannelId: null,
   messagesByChannel: new Map(), // channelId -> Map<msgId, msg>
@@ -88,6 +94,7 @@ const els = {
   openCreateChannelBtn: $('open-create-channel-btn'),
   openJoinChannelBtn: $('open-join-channel-btn'),
   channelList: $('channel-list'),
+  openAvatarModalBtn: $('open-avatar-modal-btn'),
   meAvatar: $('me-avatar'),
   meName: $('me-name'),
   meUsername: $('me-username'),
@@ -165,6 +172,12 @@ const els = {
   infoInviteCode: $('info-invite-code'),
   infoCopyInviteBtn: $('info-copy-invite-btn'),
   infoMembersList: $('info-members-list'),
+
+  modalAvatar: $('modal-avatar'),
+  avatarModalPreview: $('avatar-modal-preview'),
+  avatarUploadBtn: $('avatar-upload-btn'),
+  avatarFileInput: $('avatar-file-input'),
+  avatarPresetGrid: $('avatar-preset-grid'),
 
   toastContainer: $('toast-container'),
 };
@@ -268,6 +281,11 @@ function bindEvents() {
     applyTheme(cur === 'dark' ? 'light' : 'dark');
   });
   els.logoutBtn.addEventListener('click', handleLogout);
+
+  // 頭像設定彈窗與上傳
+  els.openAvatarModalBtn.addEventListener('click', openAvatarModal);
+  els.avatarUploadBtn.addEventListener('click', () => els.avatarFileInput.click());
+  els.avatarFileInput.addEventListener('change', handleAvatarUpload);
 
   // 手機側邊欄
   els.mobileMenuBtn.addEventListener('click', () => toggleSidebar(true));
@@ -579,13 +597,187 @@ function enterAppView() {
   renderMeProfile();
 }
 
+function applyUserAvatar(el, { userId, displayName, fallbackColor = '' } = {}) {
+  const isMe = state.user && userId === state.user.id;
+  const prof = (userId && state.userProfiles[userId]) || null;
+  const avatarColor = (isMe && state.user.avatarColor)
+    || (prof && prof.avatarColor)
+    || fallbackColor
+    || colorFromId(userId || displayName);
+  const avatar = isMe
+    ? (state.user.avatar || (prof && prof.avatar) || '')
+    : ((prof && prof.avatar) || '');
+
+  renderAvatarEl(el, {
+    displayName: displayName || (prof && prof.displayName) || '?',
+    avatarColor,
+    avatar,
+    token: state.token,
+  });
+}
+
 function renderMeProfile() {
   if (!state.user) return;
-  const color = state.user.avatarColor || colorFromId(state.user.id);
-  els.meAvatar.style.background = color;
-  els.meAvatar.textContent = getInitial(state.user.displayName);
+  applyUserAvatar(els.meAvatar, {
+    userId: state.user.id,
+    displayName: state.user.displayName,
+    fallbackColor: state.user.avatarColor,
+  });
   els.meName.textContent = state.user.displayName;
   els.meUsername.textContent = '@' + state.user.username;
+}
+
+function openAvatarModal() {
+  if (!state.user) return;
+  toggleSidebar(false);
+  applyUserAvatar(els.avatarModalPreview, {
+    userId: state.user.id,
+    displayName: state.user.displayName,
+    fallbackColor: state.user.avatarColor,
+  });
+  renderAvatarPresetGrid();
+  openModal(els.modalAvatar);
+}
+
+function renderAvatarPresetGrid() {
+  els.avatarPresetGrid.textContent = '';
+  const currentAvatar = String((state.user && state.user.avatar) || '');
+
+  for (const preset of AVATAR_PRESETS) {
+    const val = preset.id === 'initial' ? '' : `preset:${preset.id}`;
+    const isSelected = currentAvatar === val;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'avatar-preset-btn' + (isSelected ? ' selected' : '');
+
+    const circle = document.createElement('div');
+    circle.className = 'avatar avatar-md';
+    renderAvatarEl(circle, {
+      displayName: state.user.displayName,
+      avatarColor: state.user.avatarColor || colorFromId(state.user.id),
+      avatar: val,
+      token: state.token,
+    });
+
+    const label = document.createElement('span');
+    label.textContent = preset.label;
+
+    btn.appendChild(circle);
+    btn.appendChild(label);
+    btn.addEventListener('click', () => handleSelectAvatarPreset(preset.id));
+    els.avatarPresetGrid.appendChild(btn);
+  }
+}
+
+async function handleSelectAvatarPreset(presetId) {
+  if (!state.user) return;
+  const nextVal = presetId === 'initial' ? '' : `preset:${presetId}`;
+  const prevVal = state.user.avatar || '';
+  if (nextVal === prevVal) {
+    closeModal(els.modalAvatar);
+    return;
+  }
+
+  // 樂觀更新
+  state.user.avatar = nextVal;
+  state.userProfiles[state.user.id] = {
+    displayName: state.user.displayName,
+    avatarColor: state.user.avatarColor,
+    avatar: nextVal,
+  };
+  saveSession();
+  renderMeProfile();
+  applyUserAvatar(els.avatarModalPreview, {
+    userId: state.user.id,
+    displayName: state.user.displayName,
+    fallbackColor: state.user.avatarColor,
+  });
+  renderAvatarPresetGrid();
+  renderMessages();
+
+  try {
+    const res = await apiPost('updateAvatar', { mode: 'preset', preset: presetId }, { token: state.token });
+    if (res.user) {
+      state.user = res.user;
+      saveSession();
+    }
+    if (res.userProfiles) state.userProfiles = res.userProfiles;
+    renderMeProfile();
+    renderMessages();
+    showToast('頭像已更新！', 'success');
+    closeModal(els.modalAvatar);
+  } catch (err) {
+    state.user.avatar = prevVal;
+    if (state.userProfiles[state.user.id]) state.userProfiles[state.user.id].avatar = prevVal;
+    saveSession();
+    renderMeProfile();
+    renderAvatarPresetGrid();
+    renderMessages();
+    showToast('頭像更新失敗：' + err.message, 'error');
+  }
+}
+
+async function handleAvatarUpload() {
+  const file = els.avatarFileInput.files && els.avatarFileInput.files[0];
+  els.avatarFileInput.value = '';
+  if (!file || !state.user) return;
+
+  setBtnLoading(els.avatarUploadBtn, true, '上傳中…');
+  try {
+    const processed = await processAvatarFile(file);
+
+    // 預覽區先即時顯示
+    renderAvatarEl(els.avatarModalPreview, {
+      displayName: state.user.displayName,
+      previewDataUrl: processed.dataUrl,
+    });
+
+    const res = await apiPost(
+      'updateAvatar',
+      {
+        mode: 'upload',
+        imageData: processed.base64,
+        imageMime: processed.mime,
+      },
+      { token: state.token }
+    );
+
+    const avatarVal = String(res.avatar || (res.user && res.user.avatar) || '');
+    if (avatarVal.startsWith('drive:')) {
+      cacheImageDataUrl(avatarVal.slice(6), processed.dataUrl);
+    }
+
+    if (res.user) {
+      state.user = res.user;
+    } else {
+      state.user.avatar = avatarVal;
+    }
+    if (res.userProfiles) {
+      state.userProfiles = res.userProfiles;
+    } else {
+      state.userProfiles[state.user.id] = {
+        displayName: state.user.displayName,
+        avatarColor: state.user.avatarColor,
+        avatar: state.user.avatar,
+      };
+    }
+
+    saveSession();
+    renderMeProfile();
+    renderMessages();
+    showToast('自訂頭像已上傳並套用！', 'success');
+    closeModal(els.modalAvatar);
+  } catch (err) {
+    applyUserAvatar(els.avatarModalPreview, {
+      userId: state.user.id,
+      displayName: state.user.displayName,
+      fallbackColor: state.user.avatarColor,
+    });
+    showToast('頭像上傳失敗：' + err.message, 'error');
+  } finally {
+    setBtnLoading(els.avatarUploadBtn, false, '上傳自己的頭像');
+  }
 }
 
 // ==================== 頻道管理 ====================
@@ -593,6 +785,8 @@ async function loadInitialData() {
   setSyncIndicator('syncing');
   const res = await apiPost('getChannels', {}, { token: state.token });
   state.channels = res.channels || [];
+  if (res.userProfiles) state.userProfiles = res.userProfiles;
+  renderMeProfile();
   state.globalVersion = Number(res.globalVersion || 0);
   for (const ch of state.channels) {
     state.channelLastMsgAt.set(ch.id, Number(ch.lastMessageAt || 0));
@@ -803,20 +997,40 @@ function openChannelInfoModal() {
   }
 
   els.infoMembersList.textContent = '';
+  const memberIds = Array.isArray(ch.memberIds) && ch.memberIds.length > 0 ? ch.memberIds : null;
   const names = ch.memberNames && ch.memberNames.length > 0 ? ch.memberNames : [state.user.displayName];
-  for (const name of names) {
-    const li = document.createElement('li');
-    const av = document.createElement('span');
-    av.className = 'avatar avatar-sm';
-    av.style.background = colorFromId(name);
-    av.textContent = getInitial(name);
 
-    const text = document.createElement('span');
-    text.textContent = name + (name === ch.ownerName ? '（建立者）' : '');
+  if (memberIds) {
+    for (let i = 0; i < memberIds.length; i++) {
+      const uid = memberIds[i];
+      const prof = state.userProfiles[uid];
+      const name = (prof && prof.displayName) || names[i] || uid;
+      const li = document.createElement('li');
+      const av = document.createElement('span');
+      av.className = 'avatar avatar-sm';
+      applyUserAvatar(av, { userId: uid, displayName: name });
 
-    li.appendChild(av);
-    li.appendChild(text);
-    els.infoMembersList.appendChild(li);
+      const text = document.createElement('span');
+      text.textContent = name + (uid === ch.ownerId ? '（建立者）' : '');
+
+      li.appendChild(av);
+      li.appendChild(text);
+      els.infoMembersList.appendChild(li);
+    }
+  } else {
+    for (const name of names) {
+      const li = document.createElement('li');
+      const av = document.createElement('span');
+      av.className = 'avatar avatar-sm';
+      applyUserAvatar(av, { displayName: name });
+
+      const text = document.createElement('span');
+      text.textContent = name + (name === ch.ownerName ? '（建立者）' : '');
+
+      li.appendChild(av);
+      li.appendChild(text);
+      els.infoMembersList.appendChild(li);
+    }
   }
 
   openModal(els.modalChannelInfo);
@@ -891,6 +1105,22 @@ async function syncNow() {
     setSyncIndicator('ok');
 
     if (res.hasChanges) {
+      let profilesChanged = false;
+      if (res.userProfiles && typeof res.userProfiles === 'object') {
+        const prevSnap = JSON.stringify(state.userProfiles);
+        const nextSnap = JSON.stringify(res.userProfiles);
+        if (prevSnap !== nextSnap) {
+          state.userProfiles = res.userProfiles;
+          profilesChanged = true;
+          const myProf = state.user && state.userProfiles[state.user.id];
+          if (myProf && myProf.avatar !== undefined && myProf.avatar !== state.user.avatar) {
+            state.user.avatar = myProf.avatar;
+            saveSession();
+          }
+          renderMeProfile();
+        }
+      }
+
       const updatedOtherChannels = [];
       if (Array.isArray(res.channels)) {
         for (const ch of res.channels) {
@@ -924,8 +1154,8 @@ async function syncNow() {
           state.channelVersion.set(targetChannelId, Number(res.version));
         }
 
-        if (res.messages.length > 0 || isFirstLoad) {
-          renderMessages({ forceScrollBottom: isFirstLoad || wasAtBottom });
+        if (res.messages.length > 0 || isFirstLoad || profilesChanged) {
+          renderMessages({ forceScrollBottom: isFirstLoad || (res.messages.length > 0 && wasAtBottom) });
           if (incomingFromOthers.length > 0 && !wasAtBottom) {
             els.scrollBottomBtn.classList.remove('hidden');
           }
@@ -1087,10 +1317,10 @@ function buildMessageRow(msg, compact) {
   avatarSlot.className = 'msg-avatar-slot';
   const avatar = document.createElement('div');
   avatar.className = 'avatar avatar-sm';
-  avatar.style.background = isMe
-    ? (state.user.avatarColor || colorFromId(msg.senderId))
-    : colorFromId(msg.senderId);
-  avatar.textContent = getInitial(msg.senderName);
+  applyUserAvatar(avatar, {
+    userId: msg.senderId,
+    displayName: msg.senderName,
+  });
   avatarSlot.appendChild(avatar);
   row.appendChild(avatarSlot);
 
@@ -2038,6 +2268,7 @@ function saveSession() {
 function clearSession() {
   state.token = '';
   state.user = null;
+  state.userProfiles = {};
   state.channels = [];
   state.currentChannelId = null;
   state.messagesByChannel.clear();

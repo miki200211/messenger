@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=5" />
+  <link rel="stylesheet" href="css/style.css?v=6" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -90,13 +90,16 @@
       <nav id="channel-list" class="channel-list" aria-label="頻道列表"></nav>
 
       <div class="sidebar-footer">
-        <div class="me-info">
-          <div id="me-avatar" class="avatar avatar-sm"></div>
+        <button id="open-avatar-modal-btn" class="me-info me-info-btn" type="button" title="點擊更換頭像">
+          <div class="me-avatar-wrap">
+            <div id="me-avatar" class="avatar avatar-sm"></div>
+            <span class="me-avatar-edit-dot" aria-hidden="true">✎</span>
+          </div>
           <div class="me-text">
             <div id="me-name" class="me-name"></div>
             <div id="me-username" class="me-username"></div>
           </div>
-        </div>
+        </button>
         <button id="logout-btn" class="icon-btn" type="button" title="登出" aria-label="登出">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -314,6 +317,29 @@
     </div>
   </div>
 
+  <!-- ==================== 彈窗：更換頭像 ==================== -->
+  <div id="modal-avatar" class="modal hidden" role="dialog" aria-modal="true" aria-label="更換個人頭像">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>更換個人頭像</h3>
+        <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="avatar-modal-top">
+          <div id="avatar-modal-preview" class="avatar avatar-lg"></div>
+          <div class="avatar-upload-col">
+            <button id="avatar-upload-btn" class="btn btn-primary btn-sm" type="button">上傳自己的頭像</button>
+            <input id="avatar-file-input" type="file" accept="image/*" class="hidden" />
+            <p class="hint-text">自動置中裁切為圓形，支援 JPG / PNG / WebP / GIF</p>
+          </div>
+        </div>
+        <div class="info-label" style="margin-top: 14px;">或選擇預設頭像</div>
+        <div id="avatar-preset-grid" class="avatar-preset-grid"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ==================== 圖片大圖檢視 (Lightbox) ==================== -->
   <div id="lightbox-modal" class="lightbox-modal hidden" role="dialog" aria-modal="true" aria-label="圖片檢視">
     <div id="lightbox-backdrop" class="lightbox-backdrop"></div>
@@ -327,6 +353,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=5"></script>
+  <script type="module" src="js/app.js?v=6"></script>
 </body>
 </html>

@@ -1,10 +1,12 @@
 /**
  * 圖片壓縮、剪貼簿/檔案處理與 Google Drive 圖片三層備援載入模組
  */
-import { apiPost } from './api.js?v=5';
+import { apiPost } from './api.js?v=6';
 
 const MAX_DIMENSION = 1400;
+const AVATAR_SIZE = 256;
 const MAX_GIF_BYTES = 2.5 * 1024 * 1024;
+const MAX_AVATAR_GIF_BYTES = 900 * 1024;
 const MAX_UPLOAD_BASE64 = 4500000; // 約 3.3 MB
 
 // 記住本機剛上傳或透過 getImage 取得的 dataUrl，避免重複讀取與閃爍
@@ -111,6 +113,53 @@ export async function processImageFile(file) {
       height: h,
       sizeBytes,
       name: file.name || '剪貼簿圖片',
+    };
+  } finally {
+    URL.revokeObjectURL(objUrl);
+  }
+}
+
+/**
+ * 將使用者上傳的頭像自動置中裁切為 256×256 正方形（GIF 保留動圖）
+ */
+export async function processAvatarFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) {
+    throw new Error('請選擇有效的圖片檔案');
+  }
+
+  if (file.type === 'image/gif') {
+    if (file.size > MAX_AVATAR_GIF_BYTES) {
+      throw new Error('GIF 頭像大小請控制在 900 KB 以內');
+    }
+    const dataUrl = await readAsDataURL(file);
+    return { dataUrl, base64: stripDataUrlPrefix(dataUrl), mime: 'image/gif' };
+  }
+
+  const objUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadHtmlImage(objUrl);
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const sx = Math.round((img.naturalWidth - side) / 2);
+    const sy = Math.round((img.naturalHeight - side) / 2);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = AVATAR_SIZE;
+    canvas.height = AVATAR_SIZE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('瀏覽器無法處理頭像圖片');
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+
+    let mime = 'image/webp';
+    let dataUrl = canvas.toDataURL('image/webp', 0.88);
+    if (!dataUrl.startsWith('data:image/webp')) {
+      mime = 'image/jpeg';
+      dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    }
+
+    return {
+      dataUrl,
+      base64: stripDataUrlPrefix(dataUrl),
+      mime,
     };
   } finally {
     URL.revokeObjectURL(objUrl);

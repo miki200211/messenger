@@ -54,6 +54,7 @@ const HEADERS = {
     'token_expire_at',
     'created_at',
     'last_active_at',
+    'avatar',
   ],
   Channels: [
     'channel_id',
@@ -90,6 +91,17 @@ const AVATAR_COLORS = [
   '#5B5FC7', '#2D7D9A', '#038387', '#498205', '#C239B3',
   '#CA5010', '#8764B8', '#0078D4', '#D13438', '#4F6BED',
 ];
+
+const ALLOWED_AVATAR_PRESETS = {
+  initial: true,
+  person_black: true,
+  person_white: true,
+  person_yellow: true,
+  person_green: true,
+  person_blue: true,
+  person_red: true,
+  monkey: true,
+};
 
 // ============================================================================
 // 公開入口：初始化 / 健康檢查 / API 派發
@@ -155,6 +167,8 @@ function doPost(e) {
         return jsonOut_(handleDeleteMessage_(body));
       case 'getImage':
         return jsonOut_(handleGetImage_(body));
+      case 'updateAvatar':
+        return jsonOut_(handleUpdateAvatar_(body));
       default:
         return jsonOut_({ ok: false, error: '不支援的操作：' + action });
     }
@@ -222,6 +236,7 @@ function handleRegister_(body) {
       tokenExpireAt,
       toSheetText_(nowText),
       toSheetText_(nowText),
+      '',
     ]);
 
     const user = {
@@ -229,8 +244,10 @@ function handleRegister_(body) {
       username: username,
       displayName: displayName,
       avatarColor: avatarColor,
+      avatar: '',
     };
     cacheUserToken_(token, user, tokenExpireAt);
+    clearUserProfilesCache_();
 
     return { ok: true, token: token, user: user };
   });
@@ -278,6 +295,7 @@ function handleLogin_(body) {
         username: String(row[1]),
         displayName: String(row[2]),
         avatarColor: String(row[3] || AVATAR_COLORS[0]),
+        avatar: String(row[10] || ''),
       };
       cacheUserToken_(token, user, tokenExpireAt);
 
@@ -292,6 +310,87 @@ function handleMe_(body) {
   const auth = requireAuth_(body.token);
   if (!auth.ok) return auth;
   return { ok: true, user: auth.user };
+}
+
+function handleUpdateAvatar_(body) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const mode = String(body.mode || 'preset').trim();
+  let avatarValue = '';
+
+  if (mode === 'preset') {
+    const preset = String(body.preset || '').trim();
+    if (!ALLOWED_AVATAR_PRESETS[preset]) {
+      return { ok: false, error: '不支援的預設頭像' };
+    }
+    avatarValue = preset === 'initial' ? '' : ('preset:' + preset);
+  } else if (mode === 'upload') {
+    const mime = String(body.imageMime || '').trim().toLowerCase();
+    const ext = ALLOWED_IMAGE_MIMES[mime];
+    if (!ext) {
+      return { ok: false, error: '頭像僅支援 WebP、JPG、PNG、GIF 格式' };
+    }
+    let b64 = String(body.imageData || '').trim();
+    const commaIdx = b64.indexOf(',');
+    if (commaIdx !== -1 && b64.indexOf('data:') === 0) {
+      b64 = b64.slice(commaIdx + 1);
+    }
+    if (!b64) return { ok: false, error: '頭像圖片資料不可為空' };
+    if (b64.length > 1600000) {
+      return { ok: false, error: '頭像檔案過大，請控制在 1 MB 以內' };
+    }
+
+    const bytes = Utilities.base64Decode(b64);
+    const safeUser = auth.user.username.replace(/[^a-z0-9_-]/gi, '').slice(0, 16) || 'user';
+    const fileName = 'avatar_' + safeUser + '_' + randomId_(6) + '.' + ext;
+    const imgFolder = ensureImagesFolder_();
+    const blob = Utilities.newBlob(bytes, mime, fileName);
+    const file = imgFolder.createFile(blob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      // 限制分享時前端會自動透過 getImage 載入
+    }
+    avatarValue = 'drive:' + file.getId();
+  } else {
+    return { ok: false, error: '不支援的頭像更新方式' };
+  }
+
+  return withLock_(function () {
+    const ss = ensureSpreadsheet_();
+    const sheet = ss.getSheetByName(SHEETS.USERS);
+    const rows = getDataRows_(sheet);
+
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) !== auth.user.id) continue;
+
+      const rowNum = i + 2;
+      sheet.getRange(rowNum, 11).setValue(toSheetText_(avatarValue));
+
+      const updatedUser = {
+        id: auth.user.id,
+        username: auth.user.username,
+        displayName: auth.user.displayName,
+        avatarColor: auth.user.avatarColor,
+        avatar: avatarValue,
+      };
+      const expireAt = Number(rows[i][7] || 0);
+      cacheUserToken_(String(body.token || '').trim(), updatedUser, expireAt);
+      clearUserProfilesCache_();
+
+      const now = nextVersion_('global_ver');
+      return {
+        ok: true,
+        user: updatedUser,
+        avatar: avatarValue,
+        userProfiles: getAllUserProfiles_(ss),
+        globalVersion: now,
+      };
+    }
+
+    return { ok: false, error: '找不到使用者資料' };
+  });
 }
 
 function handleLogout_(body) {
@@ -329,6 +428,7 @@ function handleGetChannels_(body) {
   return {
     ok: true,
     channels: channels,
+    userProfiles: getAllUserProfiles_(ss),
     globalVersion: globalVersion,
   };
 }
@@ -391,6 +491,7 @@ function handleCreateChannel_(body) {
         ownerName: auth.user.displayName,
         isOwner: true,
         memberCount: 1,
+        memberIds: members,
         memberNames: [auth.user.displayName],
         lastMessageAt: now,
         updatedAt: now,
@@ -551,6 +652,7 @@ function handleSyncMessages_(body) {
       ok: true,
       hasChanges: true,
       channels: channels,
+      userProfiles: getAllUserProfiles_(ss),
       messages: [],
       version: 0,
       globalVersion: globalVersion,
@@ -592,6 +694,7 @@ function handleSyncMessages_(body) {
     ok: true,
     hasChanges: true,
     channels: channels,
+    userProfiles: getAllUserProfiles_(ss),
     messages: finalMessages,
     version: maxVer,
     globalVersion: Math.max(globalVersion, maxVer),
@@ -1141,12 +1244,42 @@ function requireAuth_(token) {
       username: String(row[1]),
       displayName: String(row[2]),
       avatarColor: String(row[3] || AVATAR_COLORS[0]),
+      avatar: String(row[10] || ''),
     };
     cacheUserToken_(t, user, expireAt);
     return { ok: true, user: user };
   }
 
   return { ok: false, error: '無效的登入狀態，請重新登入', code: 'UNAUTHORIZED' };
+}
+
+function getAllUserProfiles_(ss) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('all_user_profiles');
+  if (cached) {
+    const parsed = safeJsonParse_(cached, null);
+    if (parsed) return parsed;
+  }
+
+  const sheet = ss.getSheetByName(SHEETS.USERS);
+  const rows = getDataRows_(sheet);
+  const map = {};
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const uid = String(r[0] || '');
+    if (!uid) continue;
+    map[uid] = {
+      displayName: String(r[2] || ''),
+      avatarColor: String(r[3] || AVATAR_COLORS[0]),
+      avatar: String(r[10] || ''),
+    };
+  }
+  cache.put('all_user_profiles', JSON.stringify(map), 600);
+  return map;
+}
+
+function clearUserProfilesCache_() {
+  CacheService.getScriptCache().remove('all_user_profiles');
 }
 
 function listUserChannels_(ss, userId) {
@@ -1212,6 +1345,7 @@ function formatChannelRow_(row, viewerUserId) {
     ownerName: String(row[4] || ''),
     isOwner: isOwner,
     memberCount: members.length,
+    memberIds: members,
     memberNames: memberNames,
     lastMessageAt: Number(row[8] || 0),
     updatedAt: Number(row[9] || 0),

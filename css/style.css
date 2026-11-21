@@ -467,6 +467,46 @@ button {
   white-space: nowrap;
 }
 
+.me-info-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 8px;
+  text-align: left;
+  transition: background 0.15s;
+}
+.me-info-btn:hover {
+  background: var(--bg-surface-hover);
+}
+.me-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.me-avatar-edit-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px var(--bg-sidebar);
+  opacity: 0.85;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.me-info-btn:hover .me-avatar-edit-dot {
+  transform: scale(1.12);
+  opacity: 1;
+}
+
 .avatar {
   width: 34px;
   height: 34px;
@@ -479,11 +519,87 @@ button {
   justify-content: center;
   flex-shrink: 0;
   user-select: none;
+  overflow: hidden;
+  position: relative;
 }
 .avatar-sm {
   width: 32px;
   height: 32px;
   font-size: 13px;
+}
+.avatar-md {
+  width: 46px;
+  height: 46px;
+  font-size: 18px;
+}
+.avatar-lg {
+  width: 68px;
+  height: 68px;
+  font-size: 26px;
+}
+.avatar-light {
+  box-shadow: inset 0 0 0 1.5px rgba(107, 114, 128, 0.35);
+}
+.avatar-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.avatar-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-monkey-img {
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 頭像設定彈窗 */
+.avatar-modal-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.avatar-upload-col {
+  flex: 1;
+  min-width: 0;
+}
+.avatar-preset-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.avatar-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 6px 7px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: border-color 0.15s, background 0.15s, transform 0.14s;
+}
+.avatar-preset-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-surface-hover);
+  transform: translateY(-1px);
+}
+.avatar-preset-btn.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 /* ==================== 右側主聊天區 ==================== */

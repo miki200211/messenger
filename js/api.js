@@ -2,7 +2,7 @@
  * Google Apps Script API 封裝
  * 使用 Content-Type: text/plain 避開 CORS Preflight (OPTIONS) 限制。
  */
-import { getGasUrl } from './config.js?v=5';
+import { getGasUrl } from './config.js?v=6';
 
 let onUnauthorized = null;
 
