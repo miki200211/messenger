@@ -55,6 +55,7 @@ const HEADERS = {
     'created_at',
     'last_active_at',
     'avatar',
+    'notify_prefs_json',
   ],
   Channels: [
     'channel_id',
@@ -67,6 +68,7 @@ const HEADERS = {
     'created_at',
     'last_message_at',
     'updated_at',
+    'last_sender_id',
   ],
   Messages: [
     'msg_id',
@@ -103,7 +105,7 @@ const ALLOWED_AVATAR_PRESETS = {
   monkey: true,
 };
 
-const SCHEMA_VERSION = 'v4';
+const SCHEMA_VERSION = 'v5';
 let _reqSs = null;
 let _reqImgFolder = null;
 
@@ -244,6 +246,7 @@ function handleRegister_(body) {
       toSheetText_(nowText),
       toSheetText_(nowText),
       '',
+      '',
     ]);
 
     const user = {
@@ -252,6 +255,7 @@ function handleRegister_(body) {
       displayName: displayName,
       avatarColor: avatarColor,
       avatar: '',
+      notifyPrefs: sanitizeNotifyPrefs_(null),
     };
     cacheUserToken_(token, user, tokenExpireAt);
     clearUserProfilesCache_();
@@ -303,6 +307,7 @@ function handleLogin_(body) {
         displayName: String(row[2]),
         avatarColor: String(row[3] || AVATAR_COLORS[0]),
         avatar: String(row[10] || ''),
+        notifyPrefs: sanitizeNotifyPrefs_(safeJsonParse_(row[11], null)),
       };
       cacheUserToken_(token, user, tokenExpireAt);
 
@@ -376,6 +381,9 @@ function handleUpdateProfile_(body) {
     return { ok: false, error: '不支援的頭像更新方式' };
   }
 
+  const hasNotifyPrefsUpdate = body.notifyPrefs && typeof body.notifyPrefs === 'object';
+  const nextNotifyPrefs = hasNotifyPrefsUpdate ? sanitizeNotifyPrefs_(body.notifyPrefs) : null;
+
   return withLock_(function () {
     const ss = ensureSpreadsheet_();
     const sheet = ss.getSheetByName(SHEETS.USERS);
@@ -397,12 +405,19 @@ function handleUpdateProfile_(body) {
         avatarValue = String(rows[i][10] || '');
       }
 
+      let finalNotifyPrefs = sanitizeNotifyPrefs_(safeJsonParse_(rows[i][11], null));
+      if (hasNotifyPrefsUpdate) {
+        finalNotifyPrefs = nextNotifyPrefs;
+        sheet.getRange(rowNum, 12).setValue(JSON.stringify(finalNotifyPrefs));
+      }
+
       const updatedUser = {
         id: auth.user.id,
         username: auth.user.username,
         displayName: nameChanged ? newDisplayName : oldDisplayName,
         avatarColor: auth.user.avatarColor,
         avatar: avatarValue,
+        notifyPrefs: finalNotifyPrefs,
       };
       const expireAt = Number(rows[i][7] || 0);
       cacheUserToken_(String(body.token || '').trim(), updatedUser, expireAt);
@@ -530,6 +545,7 @@ function handleCreateChannel_(body) {
       toSheetText_(formatDateTime_(now)),
       now,
       now,
+      toSheetText_(auth.user.id),
     ]);
 
     cacheChannelMeta_(channelId, {
@@ -555,6 +571,7 @@ function handleCreateChannel_(body) {
         memberNames: [auth.user.displayName],
         lastMessageAt: now,
         updatedAt: now,
+        lastSenderId: auth.user.id,
       },
     };
   });
@@ -977,7 +994,7 @@ function handleSendMessage_(body) {
     ]);
 
     const chSheet = ss.getSheetByName(SHEETS.CHANNELS);
-    chSheet.getRange(chInfo.rowNum, 9, 1, 2).setValues([[now, now]]);
+    chSheet.getRange(chInfo.rowNum, 9, 1, 3).setValues([[now, now, toSheetText_(auth.user.id)]]);
 
     setChannelVersion_(channelId, now);
 
@@ -1426,6 +1443,7 @@ function requireAuth_(token) {
       displayName: String(row[2]),
       avatarColor: String(row[3] || AVATAR_COLORS[0]),
       avatar: String(row[10] || ''),
+      notifyPrefs: sanitizeNotifyPrefs_(safeJsonParse_(row[11], null)),
     };
     cacheUserToken_(t, user, expireAt);
     return { ok: true, user: user };
@@ -1454,10 +1472,22 @@ function getAllUserProfiles_(ss) {
       displayName: String(r[2] || ''),
       avatarColor: String(r[3] || AVATAR_COLORS[0]),
       avatar: String(r[10] || ''),
+      notifyPrefs: sanitizeNotifyPrefs_(safeJsonParse_(r[11], null)),
     };
   }
   cache.put('all_user_profiles', JSON.stringify(map), 600);
   return map;
+}
+
+function sanitizeNotifyPrefs_(raw) {
+  const obj = (raw && typeof raw === 'object') ? raw : {};
+  const m = String(obj.mode || 'normal').trim();
+  const mode = (m === 'hidden' || m === 'custom') ? m : 'normal';
+  return {
+    mode: mode,
+    title: String(obj.title || '').trim().slice(0, 50),
+    body: String(obj.body || '').trim().slice(0, 100),
+  };
 }
 
 function clearUserProfilesCache_() {
@@ -1588,6 +1618,7 @@ function formatChannelRow_(row, viewerUserId) {
     memberNames: memberNames,
     lastMessageAt: Number(row[8] || 0),
     updatedAt: Number(row[9] || 0),
+    lastSenderId: String(row[10] || ''),
   };
 }
 

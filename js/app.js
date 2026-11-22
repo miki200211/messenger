@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=15';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=15';
+import { CONFIG, getGasUrl } from './config.js?v=16';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=16';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,14 +8,19 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=15';
+} from './emojis.js?v=16';
 import {
   isNotifyEnabled,
   getNotifyPermission,
+  getLocalNotifySettings,
+  saveLocalNotifySettings,
+  requestBrowserPermission,
   toggleNotifications,
+  testBrowserPopup,
+  formatIncomingNotification,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=15';
+} from './notify.js?v=16';
 import {
   parseImageContent,
   processImageFile,
@@ -24,11 +29,11 @@ import {
   cacheImageDataUrl,
   getCachedImageDataUrl,
   formatBytes,
-} from './images.js?v=15';
+} from './images.js?v=16';
 import {
   AVATAR_PRESETS,
   renderAvatarEl,
-} from './avatars.js?v=15';
+} from './avatars.js?v=16';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
@@ -115,6 +120,7 @@ const els = {
   resetInviteBtn: $('reset-invite-btn'),
   privacyToggleBtn: $('privacy-toggle-btn'),
   notifyToggleBtn: $('notify-toggle-btn'),
+  openSettingsBtn: $('open-settings-btn'),
   syncStatus: $('sync-status'),
 
   emptyState: $('empty-state'),
@@ -196,6 +202,25 @@ const els = {
   avatarFileInput: $('avatar-file-input'),
   avatarPresetGrid: $('avatar-preset-grid'),
   avatarSaveBtn: $('avatar-save-btn'),
+
+  modalSettings: $('modal-settings'),
+  settingsForm: $('settings-form'),
+  settingsPermBadge: $('settings-perm-badge'),
+  settingDesktopNotify: $('setting-desktop-notify'),
+  settingSoundNotify: $('setting-sound-notify'),
+  settingPopupTiming: $('setting-popup-timing'),
+  settingRxPrivacy: $('setting-rx-privacy'),
+  settingsTestPopupBtn: $('settings-test-popup-btn'),
+  settingsPermHint: $('settings-perm-hint'),
+  settingOutgoingMode: $('setting-outgoing-mode'),
+  settingOutgoingTitleWrap: $('setting-outgoing-title-wrap'),
+  settingOutgoingTitle: $('setting-outgoing-title'),
+  settingOutgoingBodyWrap: $('setting-outgoing-body-wrap'),
+  settingOutgoingBody: $('setting-outgoing-body'),
+  settingPreviewTitle: $('setting-preview-title'),
+  settingPreviewBody: $('setting-preview-body'),
+  settingsSaveError: $('settings-save-error'),
+  settingsSaveBtn: $('settings-save-btn'),
 
   toastContainer: $('toast-container'),
 };
@@ -306,7 +331,7 @@ function bindEvents() {
   // 防偷窺鏡像開關
   els.privacyToggleBtn.addEventListener('click', togglePrivacyMirror);
 
-  // 鈴鐺通知開關
+  // 鈴鐺通知開關 & 設定彈窗
   els.notifyToggleBtn.addEventListener('click', async () => {
     const result = await toggleNotifications();
     renderNotifyBell();
@@ -314,6 +339,13 @@ function bindEvents() {
     if (result.message) showToast(result.message, result.type);
     scheduleNextPoll();
   });
+  els.openSettingsBtn.addEventListener('click', openSettingsModal);
+  els.settingsForm.addEventListener('submit', handleSaveSettings);
+  els.settingDesktopNotify.addEventListener('change', handleDesktopNotifyToggleInModal);
+  els.settingsTestPopupBtn.addEventListener('click', handleTestPopupInModal);
+  els.settingOutgoingMode.addEventListener('change', updateOutgoingSettingsPreview);
+  els.settingOutgoingTitle.addEventListener('input', updateOutgoingSettingsPreview);
+  els.settingOutgoingBody.addEventListener('input', updateOutgoingSettingsPreview);
 
   // 登入 / 註冊切換
   els.tabLogin.addEventListener('click', () => switchAuthTab('login'));
@@ -908,6 +940,175 @@ async function handleSaveAvatar() {
   }
 }
 
+// ==================== 通知與系統設定彈窗 ====================
+function openSettingsModal() {
+  if (!state.user) return;
+  toggleSidebar(false);
+  els.settingsSaveError.classList.add('hidden');
+
+  const local = getLocalNotifySettings();
+  els.settingDesktopNotify.checked = local.desktopEnabled;
+  els.settingSoundNotify.checked = local.soundEnabled;
+  els.settingPopupTiming.value = local.popupTiming;
+  els.settingRxPrivacy.value = local.receiverPrivacy;
+
+  const prefs = (state.user.notifyPrefs && typeof state.user.notifyPrefs === 'object')
+    ? state.user.notifyPrefs
+    : { mode: 'normal', title: '', body: '' };
+  els.settingOutgoingMode.value = prefs.mode || 'normal';
+  els.settingOutgoingTitle.value = prefs.title || '';
+  els.settingOutgoingBody.value = prefs.body || '';
+
+  refreshPermissionUi();
+  updateOutgoingSettingsPreview();
+  openModal(els.modalSettings);
+}
+
+function refreshPermissionUi() {
+  const perm = getNotifyPermission();
+  els.settingsPermBadge.classList.remove('granted', 'denied');
+  if (perm === 'granted') {
+    els.settingsPermBadge.textContent = '已允許';
+    els.settingsPermBadge.classList.add('granted');
+    els.settingsPermHint.textContent = '權限正常，收到訊息可跳出瀏覽器視窗';
+  } else if (perm === 'denied') {
+    els.settingsPermBadge.textContent = '已被封鎖';
+    els.settingsPermBadge.classList.add('denied');
+    els.settingsPermHint.textContent = '請點網址列左側圖示，將「通知」改為允許後重新整理';
+  } else if (perm === 'unsupported') {
+    els.settingsPermBadge.textContent = '不支援';
+    els.settingsPermHint.textContent = '目前瀏覽器不支援桌面彈窗通知';
+  } else {
+    els.settingsPermBadge.textContent = '尚未授權';
+    els.settingsPermHint.textContent = '開啟上方開關或按測試鈕即可向瀏覽器請求權限';
+  }
+}
+
+async function handleDesktopNotifyToggleInModal() {
+  if (els.settingDesktopNotify.checked) {
+    const perm = await requestBrowserPermission();
+    refreshPermissionUi();
+    if (perm === 'denied') {
+      els.settingDesktopNotify.checked = false;
+      showToast('瀏覽器已封鎖通知權限，請於網址列左側改為允許', 'error');
+    } else if (perm !== 'granted' && perm !== 'unsupported') {
+      els.settingDesktopNotify.checked = false;
+    }
+  }
+}
+
+async function handleTestPopupInModal() {
+  const preview = buildDraftOutgoingPreview();
+  const res = await testBrowserPopup({
+    title: preview.title,
+    body: preview.body,
+  });
+  refreshPermissionUi();
+  if (res.ok) {
+    els.settingDesktopNotify.checked = true;
+    saveLocalNotifySettings({ desktopEnabled: true });
+    renderNotifyBell();
+    ringBellIcon();
+  }
+  showToast(res.message, res.ok ? 'success' : 'error');
+}
+
+function buildDraftOutgoingPreview() {
+  const mode = els.settingOutgoingMode.value || 'normal';
+  const titleInput = els.settingOutgoingTitle.value.trim();
+  const bodyInput = els.settingOutgoingBody.value.trim();
+  const ch = getCurrentChannel();
+  const myName = (state.user && state.user.displayName) || '我';
+  const chName = (ch && ch.name) || '專案討論';
+
+  return formatIncomingNotification({
+    senderPrefs: {
+      mode,
+      title: titleInput,
+      body: bodyInput,
+    },
+    senderName: myName,
+    channelName: chName,
+    rawBody: '這是一則測試訊息內容！',
+    forceHideContent: false,
+  });
+}
+
+function updateOutgoingSettingsPreview() {
+  const mode = els.settingOutgoingMode.value || 'normal';
+  els.settingOutgoingTitleWrap.classList.toggle('hidden', mode !== 'custom');
+  els.settingOutgoingBodyWrap.classList.toggle('hidden', mode === 'normal');
+
+  if (mode === 'hidden' && !els.settingOutgoingBody.value) {
+    els.settingOutgoingBody.placeholder = '預設：收到一則新訊息';
+  } else if (mode === 'custom' && !els.settingOutgoingBody.value) {
+    els.settingOutgoingBody.placeholder = '例如：您有一則新通知，請點擊查看';
+  }
+
+  const preview = buildDraftOutgoingPreview();
+  els.settingPreviewTitle.textContent = preview.title;
+  els.settingPreviewBody.textContent = preview.body;
+}
+
+async function handleSaveSettings(e) {
+  e.preventDefault();
+  if (!state.user) return;
+  els.settingsSaveError.classList.add('hidden');
+
+  let desktopEnabled = els.settingDesktopNotify.checked;
+  if (desktopEnabled) {
+    const perm = await requestBrowserPermission();
+    refreshPermissionUi();
+    if (perm === 'denied' || perm === 'default') {
+      desktopEnabled = false;
+      els.settingDesktopNotify.checked = false;
+    }
+  }
+
+  saveLocalNotifySettings({
+    desktopEnabled,
+    soundEnabled: els.settingSoundNotify.checked,
+    popupTiming: els.settingPopupTiming.value,
+    receiverPrivacy: els.settingRxPrivacy.value,
+  });
+  renderNotifyBell();
+  scheduleNextPoll();
+
+  const nextNotifyPrefs = {
+    mode: els.settingOutgoingMode.value || 'normal',
+    title: els.settingOutgoingTitle.value.trim().slice(0, 50),
+    body: els.settingOutgoingBody.value.trim().slice(0, 100),
+  };
+
+  setBtnLoading(els.settingsSaveBtn, true, '儲存中…');
+  deferNextPoll();
+  try {
+    const res = await apiPost(
+      'updateProfile',
+      { notifyPrefs: nextNotifyPrefs },
+      { token: state.token }
+    );
+    if (res.user) {
+      state.user = res.user;
+    } else {
+      state.user.notifyPrefs = nextNotifyPrefs;
+    }
+    if (res.userProfiles) {
+      state.userProfiles = res.userProfiles;
+    } else if (state.userProfiles[state.user.id]) {
+      state.userProfiles[state.user.id].notifyPrefs = nextNotifyPrefs;
+    }
+    saveSession();
+    closeModal(els.modalSettings);
+    showToast('通知與系統設定已儲存！', 'success');
+  } catch (err) {
+    els.settingsSaveError.textContent = err.message;
+    els.settingsSaveError.classList.remove('hidden');
+  } finally {
+    setBtnLoading(els.settingsSaveBtn, false, '儲存設定');
+  }
+}
+
 // ==================== 頻道管理 ====================
 async function loadInitialData() {
   setSyncIndicator('syncing');
@@ -1392,6 +1593,10 @@ async function syncNow() {
               state.user.displayName = myProf.displayName;
               meChanged = true;
             }
+            if (myProf.notifyPrefs && JSON.stringify(myProf.notifyPrefs) !== JSON.stringify(state.user.notifyPrefs || {})) {
+              state.user.notifyPrefs = myProf.notifyPrefs;
+              meChanged = true;
+            }
             if (meChanged) saveSession();
           }
           renderMeProfile();
@@ -1403,7 +1608,13 @@ async function syncNow() {
         for (const ch of res.channels) {
           const prevTs = state.channelLastMsgAt.get(ch.id);
           const nextTs = Number(ch.lastMessageAt || 0);
-          if (sinceGlobal > 0 && ch.id !== targetChannelId && prevTs !== undefined && nextTs > prevTs) {
+          if (
+            sinceGlobal > 0 &&
+            ch.id !== targetChannelId &&
+            prevTs !== undefined &&
+            nextTs > prevTs &&
+            ch.lastSenderId !== state.user.id
+          ) {
             updatedOtherChannels.push(ch);
           }
           state.channelLastMsgAt.set(ch.id, nextTs);
@@ -1450,25 +1661,34 @@ async function syncNow() {
         const last = incomingFromOthers[incomingFromOthers.length - 1];
         const ch = getCurrentChannel();
         const chName = ch ? ch.name : 'Messenger';
-        let body = '';
-        if (state.privacyMirror) {
-          body = '收到一則新訊息';
-        } else if (last.type === 'sticker') {
-          body = `[貼圖] ${getEmojiById(last.content).label}`;
+        let rawBody = '';
+        if (last.type === 'sticker') {
+          rawBody = `[貼圖] ${getEmojiById(last.content).label}`;
         } else if (last.type === 'image') {
           const imgMeta = parseImageContent(last.content);
-          body = imgMeta.caption ? `[圖片] ${imgMeta.caption.slice(0, 60)}` : '[圖片]';
+          rawBody = imgMeta.caption ? `[圖片] ${imgMeta.caption.slice(0, 60)}` : '[圖片]';
         } else {
-          body = last.content.slice(0, 80);
+          rawBody = last.content.slice(0, 80);
         }
+
+        const senderProf = state.userProfiles[last.senderId] || null;
+        const senderName = resolveUserDisplayName(last.senderId, last.senderName);
+        const formatted = formatIncomingNotification({
+          senderPrefs: senderProf && senderProf.notifyPrefs,
+          senderName,
+          channelName: chName,
+          rawBody,
+          forceHideContent: state.privacyMirror,
+        });
 
         ringBellIcon();
         notifyIncomingMessage({
-          title: `${last.senderName}（# ${chName}）`,
-          body,
+          title: formatted.title,
+          body: formatted.body,
           tag: `ch-${targetChannelId}`,
-          popup: true,
+          isUnfocused,
           onClick: () => scrollToBottom(true),
+          onFallbackPopup: ({ title, body }) => showToast(`${title}：${body}`),
         });
 
         if (isUnfocused) {
@@ -1477,13 +1697,24 @@ async function syncNow() {
         }
       } else if (updatedOtherChannels.length > 0) {
         const ch = updatedOtherChannels[0];
+        const senderProf = ch.lastSenderId ? state.userProfiles[ch.lastSenderId] : null;
+        const senderName = (senderProf && senderProf.displayName) || '頻道成員';
+        const formatted = formatIncomingNotification({
+          senderPrefs: senderProf && senderProf.notifyPrefs,
+          senderName,
+          channelName: ch.name,
+          rawBody: '收到新訊息，點擊切換查看',
+          forceHideContent: state.privacyMirror,
+        });
+
         ringBellIcon();
         notifyIncomingMessage({
-          title: `# ${ch.name}`,
-          body: '收到新訊息，點擊切換查看',
+          title: formatted.title,
+          body: formatted.body,
           tag: `ch-${ch.id}`,
-          popup: true,
+          isUnfocused,
           onClick: () => selectChannel(ch.id),
+          onFallbackPopup: ({ title, body }) => showToast(`${title}：${body}`),
         });
 
         if (isUnfocused) {
