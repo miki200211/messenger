@@ -2,7 +2,7 @@
  * 頭像系統：支援自訂上傳頭像（Google Drive）與 8 款預設頭像
  * 預設頭像：黑、白、黃、綠、藍、紅 人物頭像 + 猴子 + 名稱首字
  */
-import { createDriveImageEl } from './images.js?v=16';
+import { createDriveImageEl } from './images.js?v=17';
 
 const MONKEY_CDN_URLS = [
   'https://cdn.jsdelivr.net/npm/@lobehub/fluent-emoji-3d/assets/1f435.webp',
