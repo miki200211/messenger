@@ -1,5 +1,5 @@
-import { CONFIG, getGasUrl } from './config.js?v=17';
-import { apiPost, setUnauthorizedHandler } from './api.js?v=17';
+import { CONFIG, getGasUrl } from './config.js?v=20';
+import { apiPost, setUnauthorizedHandler } from './api.js?v=20';
 import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
@@ -8,7 +8,7 @@ import {
   createFluentImg,
   getRecentStickerIds,
   pushRecentSticker,
-} from './emojis.js?v=17';
+} from './emojis.js?v=20';
 import {
   isNotifyEnabled,
   getNotifyPermission,
@@ -20,7 +20,7 @@ import {
   formatIncomingNotification,
   notifyIncomingMessage,
   unlockAudio,
-} from './notify.js?v=17';
+} from './notify.js?v=20';
 import {
   parseImageContent,
   processImageFile,
@@ -29,17 +29,18 @@ import {
   cacheImageDataUrl,
   getCachedImageDataUrl,
   formatBytes,
-} from './images.js?v=17';
+} from './images.js?v=20';
 import {
   AVATAR_PRESETS,
   renderAvatarEl,
-} from './avatars.js?v=17';
+} from './avatars.js?v=20';
 
 const SESSION_KEY = CONFIG.STORAGE_PREFIX + 'session';
 const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
 const THEME_KEY = CONFIG.STORAGE_PREFIX + 'theme';
 const LAST_CHANNEL_KEY = CONFIG.STORAGE_PREFIX + 'last_channel';
 const PRIVACY_KEY = CONFIG.STORAGE_PREFIX + 'privacy_mirror';
+const NOTES_OPEN_KEY = CONFIG.STORAGE_PREFIX + 'notes_open';
 
 const AVATAR_PALETTE = [
   '#5B5FC7', '#2D7D9A', '#038387', '#498205', '#C239B3',
@@ -75,6 +76,10 @@ const state = {
   renderedChannelId: null,
   inFlightReactions: new Map(), // msgId -> 進行中表情請求數（避免舊輪詢蓋掉樂觀狀態）
   reactionQueue: new Map(),     // msgId -> Promise 佇列（連點多顆表情依序送出不打架）
+  notesOpen: true,
+  noteComposerColor: 'yellow',
+  editingNoteId: null,
+  draggingNoteId: null,
 };
 
 // ==================== DOM 參照 ====================
@@ -121,6 +126,8 @@ const els = {
   privacyToggleBtn: $('privacy-toggle-btn'),
   notifyToggleBtn: $('notify-toggle-btn'),
   openSettingsBtn: $('open-settings-btn'),
+  toggleNotesBtn: $('toggle-notes-btn'),
+  notesCountBadge: $('notes-count-badge'),
   syncStatus: $('sync-status'),
 
   emptyState: $('empty-state'),
@@ -160,6 +167,16 @@ const els = {
 
   messageInput: $('message-input'),
   sendBtn: $('send-btn'),
+
+  notesSidebar: $('notes-sidebar'),
+  addNoteBtn: $('add-note-btn'),
+  closeNotesBtn: $('close-notes-btn'),
+  noteComposer: $('note-composer'),
+  noteComposerInput: $('note-composer-input'),
+  noteComposerColors: $('note-composer-colors'),
+  noteComposerCancel: $('note-composer-cancel'),
+  noteComposerSave: $('note-composer-save'),
+  notesList: $('notes-list'),
 
   lightboxModal: $('lightbox-modal'),
   lightboxBackdrop: $('lightbox-backdrop'),
@@ -231,6 +248,7 @@ init();
 async function init() {
   initTheme();
   initPrivacyMirror();
+  initNotesPanel();
   renderNotifyBell();
   bindEvents();
   setUnauthorizedHandler((msg) => {
@@ -379,9 +397,31 @@ function bindEvents() {
     }
   });
 
-  // 手機側邊欄
+  // 手機側邊欄 & 右側重點便條紙欄
   els.mobileMenuBtn.addEventListener('click', () => toggleSidebar(true));
-  els.sidebarBackdrop.addEventListener('click', () => toggleSidebar(false));
+  els.sidebarBackdrop.addEventListener('click', () => {
+    toggleSidebar(false);
+    closeMobileNotesDrawer();
+  });
+  els.toggleNotesBtn.addEventListener('click', toggleNotesPanel);
+  els.closeNotesBtn.addEventListener('click', closeMobileNotesDrawer);
+  els.addNoteBtn.addEventListener('click', openNoteComposer);
+  els.noteComposerCancel.addEventListener('click', closeNoteComposer);
+  els.noteComposerSave.addEventListener('click', handleSaveNewNote);
+  els.noteComposerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+      e.preventDefault();
+      handleSaveNewNote();
+    }
+  });
+  els.noteComposerColors.querySelectorAll('.note-color-dot').forEach((dot) => {
+    dot.addEventListener('click', () => {
+      state.noteComposerColor = dot.dataset.color || 'yellow';
+      els.noteComposerColors.querySelectorAll('.note-color-dot').forEach((d) => {
+        d.classList.toggle('active', d === dot);
+      });
+    });
+  });
 
   // 建立 / 加入頻道彈窗
   const openCreate = () => {
@@ -584,6 +624,11 @@ function bindEvents() {
       clearPendingImage();
     } else if (state.replyTarget) {
       clearReplyTarget();
+    } else if (state.editingNoteId) {
+      state.editingNoteId = null;
+      renderNotesSidebar();
+    } else if (els.noteComposer && !els.noteComposer.classList.contains('hidden')) {
+      closeNoteComposer();
     }
   });
 
@@ -1222,6 +1267,7 @@ function renderCurrentChannelView() {
     els.emptyState.classList.remove('hidden');
     els.messagesWrapper.classList.add('hidden');
     els.composerArea.classList.add('hidden');
+    renderNotesSidebar();
     return;
   }
 
@@ -1240,6 +1286,7 @@ function renderCurrentChannelView() {
   els.emptyState.classList.add('hidden');
   els.messagesWrapper.classList.remove('hidden');
   els.composerArea.classList.remove('hidden');
+  renderNotesSidebar();
 }
 
 async function handleCreateChannel(e) {
@@ -2098,6 +2145,18 @@ function buildHoverToolbar(msg, isMe) {
   });
   bar.appendChild(replyBtn);
 
+  // 標記到右側重點便條按鈕
+  const pinBtn = document.createElement('button');
+  pinBtn.type = 'button';
+  pinBtn.className = 'hover-action-btn';
+  pinBtn.title = '標記到右側重點便條';
+  pinBtn.textContent = '📌';
+  pinBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handlePinMessageToNotes(msg);
+  });
+  bar.appendChild(pinBtn);
+
   // 編輯按鈕（僅本人發送的文字或圖片訊息）
   if (isMe && (msg.type === 'text' || msg.type === 'image')) {
     const editBtn = document.createElement('button');
@@ -2820,6 +2879,514 @@ function closeReactionPicker() {
   els.reactionPicker.classList.add('hidden');
 }
 
+// ==================== 右側重點便條紙功能 ====================
+const NOTE_COLORS = ['yellow', 'blue', 'green', 'pink', 'purple'];
+
+function initNotesPanel() {
+  const saved = localStorage.getItem(NOTES_OPEN_KEY);
+  const isMobile = window.innerWidth <= 768;
+  state.notesOpen = saved === null ? !isMobile : saved === '1';
+  applyNotesPanelVisibility();
+}
+
+function applyNotesPanelVisibility() {
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) {
+    els.notesSidebar.classList.remove('collapsed');
+    els.notesSidebar.classList.toggle('open', state.notesOpen);
+    els.sidebarBackdrop.classList.toggle('hidden', !state.notesOpen && !els.sidebar.classList.contains('open'));
+  } else {
+    els.notesSidebar.classList.remove('open');
+    els.notesSidebar.classList.toggle('collapsed', !state.notesOpen);
+  }
+  els.toggleNotesBtn.classList.toggle('active', state.notesOpen);
+}
+
+function toggleNotesPanel() {
+  state.notesOpen = !state.notesOpen;
+  localStorage.setItem(NOTES_OPEN_KEY, state.notesOpen ? '1' : '0');
+  applyNotesPanelVisibility();
+}
+
+function closeMobileNotesDrawer() {
+  if (window.innerWidth <= 768 && state.notesOpen) {
+    state.notesOpen = false;
+    applyNotesPanelVisibility();
+  }
+}
+
+function openNoteComposer() {
+  if (!state.currentChannelId) return;
+  if (!state.notesOpen) {
+    state.notesOpen = true;
+    localStorage.setItem(NOTES_OPEN_KEY, '1');
+    applyNotesPanelVisibility();
+  }
+  els.noteComposer.classList.remove('hidden');
+  els.noteComposerInput.value = '';
+  els.noteComposerInput.focus();
+}
+
+function closeNoteComposer() {
+  els.noteComposer.classList.add('hidden');
+  els.noteComposerInput.value = '';
+}
+
+function renderNotesSidebar() {
+  const ch = getCurrentChannel();
+  const notes = (ch && Array.isArray(ch.pinnedNotes)) ? ch.pinnedNotes : [];
+
+  if (notes.length > 0) {
+    els.notesCountBadge.textContent = String(notes.length);
+    els.notesCountBadge.classList.remove('hidden');
+  } else {
+    els.notesCountBadge.classList.add('hidden');
+  }
+
+  els.addNoteBtn.disabled = !ch;
+  els.notesList.textContent = '';
+
+  if (!ch) {
+    const empty = document.createElement('div');
+    empty.className = 'notes-empty';
+    empty.textContent = '選擇頻道後，可將聊天重點標記成右側便利貼，並自由拖曳排序。';
+    els.notesList.appendChild(empty);
+    return;
+  }
+
+  if (notes.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'notes-empty';
+    empty.textContent = '目前還沒有重點便條。\n\n滑鼠移到聊天訊息上點「📌」，或按右上角「＋ 新增」即可貼上便條紙！';
+    els.notesList.appendChild(empty);
+    return;
+  }
+
+  for (let i = 0; i < notes.length; i++) {
+    els.notesList.appendChild(buildNoteCard(notes[i], i, notes.length));
+  }
+}
+
+function buildNoteCard(note, index, total) {
+  const card = document.createElement('div');
+  card.className = 'note-card';
+  card.dataset.color = note.color || 'yellow';
+  card.dataset.noteId = note.id;
+
+  const isEditing = state.editingNoteId === note.id;
+  card.draggable = !isEditing;
+
+  // 拖曳排序事件
+  card.addEventListener('dragstart', (e) => {
+    if (isEditing) {
+      e.preventDefault();
+      return;
+    }
+    state.draggingNoteId = note.id;
+    card.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', note.id);
+    }
+  });
+  card.addEventListener('dragend', () => {
+    state.draggingNoteId = null;
+    card.classList.remove('dragging');
+    els.notesList.querySelectorAll('.note-card.drag-over').forEach((n) => n.classList.remove('drag-over'));
+  });
+  card.addEventListener('dragover', (e) => {
+    if (!state.draggingNoteId || state.draggingNoteId === note.id) return;
+    e.preventDefault();
+    card.classList.add('drag-over');
+  });
+  card.addEventListener('dragleave', () => {
+    card.classList.remove('drag-over');
+  });
+  card.addEventListener('drop', (e) => {
+    e.preventDefault();
+    card.classList.remove('drag-over');
+    const fromId = state.draggingNoteId;
+    if (!fromId || fromId === note.id) return;
+    reorderNotesByIds(fromId, note.id);
+  });
+
+  // 卡片頂部：來源標籤 + 操作鈕（上移/下移/換色/編輯/刪除）
+  const top = document.createElement('div');
+  top.className = 'note-card-top';
+
+  const source = document.createElement('span');
+  source.className = 'note-source-tag';
+  source.textContent = note.msgId && note.msgSender
+    ? `📌 ${note.msgSender} 的重點`
+    : `📝 ${note.createdByName || '重點便條'}`;
+  top.appendChild(source);
+
+  const actions = document.createElement('div');
+  actions.className = 'note-card-actions';
+
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button';
+  upBtn.className = 'note-mini-btn';
+  upBtn.title = '上移';
+  upBtn.textContent = '↑';
+  upBtn.disabled = index === 0;
+  upBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleMoveNote(index, index - 1);
+  });
+
+  const downBtn = document.createElement('button');
+  downBtn.type = 'button';
+  downBtn.className = 'note-mini-btn';
+  downBtn.title = '下移';
+  downBtn.textContent = '↓';
+  downBtn.disabled = index === total - 1;
+  downBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleMoveNote(index, index + 1);
+  });
+
+  const colorBtn = document.createElement('button');
+  colorBtn.type = 'button';
+  colorBtn.className = 'note-mini-btn';
+  colorBtn.title = '切換便條顏色';
+  colorBtn.textContent = '🎨';
+  colorBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const nextColor = NOTE_COLORS[(NOTE_COLORS.indexOf(note.color || 'yellow') + 1) % NOTE_COLORS.length];
+    handleChangeNoteColor(note.id, nextColor);
+  });
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'note-mini-btn';
+  editBtn.title = '編輯便條內容';
+  editBtn.textContent = '✏';
+  editBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.editingNoteId = isEditing ? null : note.id;
+    renderNotesSidebar();
+  });
+
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'note-mini-btn danger';
+  delBtn.title = '移除便條';
+  delBtn.textContent = '✕';
+  delBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleDeleteNote(note.id);
+  });
+
+  actions.appendChild(upBtn);
+  actions.appendChild(downBtn);
+  actions.appendChild(colorBtn);
+  actions.appendChild(editBtn);
+  actions.appendChild(delBtn);
+  top.appendChild(actions);
+  card.appendChild(top);
+
+  // 圖片縮圖（若標記的是圖片訊息）
+  if (note.msgType === 'image' && note.fileId) {
+    const thumb = createDriveImageEl(note.fileId, {
+      token: state.token,
+      size: 400,
+      className: 'note-card-thumb',
+      alt: '重點圖片',
+    });
+    thumb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox({ fileId: note.fileId, caption: note.text }, thumb.src);
+    });
+    card.appendChild(thumb);
+  }
+
+  // 內文或內嵌編輯框
+  if (isEditing) {
+    const ta = document.createElement('textarea');
+    ta.className = 'note-edit-textarea';
+    ta.rows = 3;
+    ta.maxLength = 600;
+    ta.value = note.text || '';
+    card.appendChild(ta);
+
+    const editFooter = document.createElement('div');
+    editFooter.className = 'inline-row';
+    editFooter.style.justifyContent = 'flex-end';
+    editFooter.style.marginTop = '6px';
+
+    const cancelEdit = document.createElement('button');
+    cancelEdit.type = 'button';
+    cancelEdit.className = 'mini-btn';
+    cancelEdit.textContent = '取消';
+    cancelEdit.addEventListener('click', () => {
+      state.editingNoteId = null;
+      renderNotesSidebar();
+    });
+
+    const saveEdit = document.createElement('button');
+    saveEdit.type = 'button';
+    saveEdit.className = 'btn btn-primary btn-xs';
+    saveEdit.textContent = '儲存';
+    saveEdit.addEventListener('click', () => handleSaveNoteEdit(note.id, ta.value));
+
+    editFooter.appendChild(cancelEdit);
+    editFooter.appendChild(saveEdit);
+    card.appendChild(editFooter);
+    setTimeout(() => ta.focus(), 20);
+  } else {
+    const textEl = document.createElement('div');
+    textEl.className = 'note-card-text';
+    renderSafeTextWithLinks(textEl, note.text || '');
+    card.appendChild(textEl);
+  }
+
+  // 卡片底部：跳轉回原訊息 + 標記時間
+  const footer = document.createElement('div');
+  footer.className = 'note-card-footer';
+  const meta = document.createElement('span');
+  meta.textContent = note.createdAt ? formatTime(note.createdAt) : '';
+  footer.appendChild(meta);
+
+  if (note.msgId) {
+    const jumpBtn = document.createElement('button');
+    jumpBtn.type = 'button';
+    jumpBtn.className = 'note-jump-btn';
+    jumpBtn.textContent = '跳至訊息 ↗';
+    jumpBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeMobileNotesDrawer();
+      jumpToMessage(note.msgId);
+    });
+    footer.appendChild(jumpBtn);
+  }
+  card.appendChild(footer);
+
+  return card;
+}
+
+async function handlePinMessageToNotes(msg) {
+  const ch = getCurrentChannel();
+  if (!ch || !msg || msg._sending || msg.isDeleted) return;
+
+  if (!state.notesOpen) {
+    state.notesOpen = true;
+    localStorage.setItem(NOTES_OPEN_KEY, '1');
+    applyNotesPanelVisibility();
+  }
+
+  let text = '';
+  let fileId = '';
+  if (msg.type === 'sticker') {
+    const emoji = getEmojiById(msg.content);
+    text = `[貼圖] ${emoji.label}`;
+  } else if (msg.type === 'image') {
+    const imgMeta = parseImageContent(msg.content);
+    fileId = imgMeta.fileId || '';
+    text = imgMeta.caption ? imgMeta.caption : '（圖片重點）';
+  } else {
+    text = msg.content.slice(0, 600);
+  }
+
+  const msgSender = resolveUserDisplayName(msg.senderId, msg.senderName);
+  await addNoteToChannel(ch, {
+    text,
+    color: state.noteComposerColor || 'yellow',
+    msgId: msg.id,
+    msgSender,
+    msgType: msg.type,
+    fileId,
+  });
+}
+
+async function handleSaveNewNote() {
+  const ch = getCurrentChannel();
+  if (!ch) return;
+  const text = els.noteComposerInput.value.trim();
+  if (!text) {
+    showToast('請輸入便條內容', 'error');
+    return;
+  }
+  closeNoteComposer();
+  await addNoteToChannel(ch, {
+    text: text.slice(0, 600),
+    color: state.noteComposerColor || 'yellow',
+    msgType: 'note',
+  });
+}
+
+async function addNoteToChannel(ch, notePayload) {
+  if (!Array.isArray(ch.pinnedNotes)) ch.pinnedNotes = [];
+  const prevNotes = ch.pinnedNotes.slice();
+
+  const tempNote = {
+    id: 'temp_note_' + Date.now(),
+    text: notePayload.text,
+    color: notePayload.color || 'yellow',
+    msgId: notePayload.msgId || '',
+    msgSender: notePayload.msgSender || '',
+    msgType: notePayload.msgType || 'note',
+    fileId: notePayload.fileId || '',
+    createdBy: state.user.id,
+    createdByName: state.user.displayName,
+    createdAt: Date.now(),
+  };
+
+  if (notePayload.msgId) {
+    ch.pinnedNotes = ch.pinnedNotes.filter((n) => n.msgId !== notePayload.msgId);
+  }
+  ch.pinnedNotes.unshift(tempNote);
+  renderNotesSidebar();
+  deferNextPoll();
+
+  try {
+    const res = await apiPost(
+      'addPinnedNote',
+      { channelId: ch.id, ...notePayload },
+      { token: state.token }
+    );
+    if (Array.isArray(res.pinnedNotes)) {
+      ch.pinnedNotes = res.pinnedNotes;
+      renderNotesSidebar();
+    }
+    showToast('已貼上重點便條 📌', 'success');
+  } catch (err) {
+    ch.pinnedNotes = prevNotes;
+    renderNotesSidebar();
+    showToast('標記便條失敗：' + err.message, 'error');
+  }
+}
+
+async function handleSaveNoteEdit(noteId, rawText) {
+  const ch = getCurrentChannel();
+  if (!ch || !Array.isArray(ch.pinnedNotes)) return;
+  const text = String(rawText || '').trim().slice(0, 600);
+  if (!text) {
+    showToast('便條內容不可為空', 'error');
+    return;
+  }
+
+  const note = ch.pinnedNotes.find((n) => n.id === noteId);
+  if (!note) return;
+  const prevText = note.text;
+  note.text = text;
+  state.editingNoteId = null;
+  renderNotesSidebar();
+  deferNextPoll();
+
+  try {
+    const res = await apiPost(
+      'updatePinnedNote',
+      { channelId: ch.id, noteId, text },
+      { token: state.token }
+    );
+    if (Array.isArray(res.pinnedNotes)) {
+      ch.pinnedNotes = res.pinnedNotes;
+      renderNotesSidebar();
+    }
+  } catch (err) {
+    note.text = prevText;
+    renderNotesSidebar();
+    showToast('更新便條失敗：' + err.message, 'error');
+  }
+}
+
+async function handleChangeNoteColor(noteId, color) {
+  const ch = getCurrentChannel();
+  if (!ch || !Array.isArray(ch.pinnedNotes)) return;
+  const note = ch.pinnedNotes.find((n) => n.id === noteId);
+  if (!note) return;
+  const prevColor = note.color;
+  note.color = color;
+  renderNotesSidebar();
+  deferNextPoll();
+
+  try {
+    const res = await apiPost(
+      'updatePinnedNote',
+      { channelId: ch.id, noteId, color },
+      { token: state.token }
+    );
+    if (Array.isArray(res.pinnedNotes)) {
+      ch.pinnedNotes = res.pinnedNotes;
+      renderNotesSidebar();
+    }
+  } catch (err) {
+    note.color = prevColor;
+    renderNotesSidebar();
+    showToast('切換顏色失敗：' + err.message, 'error');
+  }
+}
+
+async function handleDeleteNote(noteId) {
+  const ch = getCurrentChannel();
+  if (!ch || !Array.isArray(ch.pinnedNotes)) return;
+  const prevNotes = ch.pinnedNotes.slice();
+  ch.pinnedNotes = ch.pinnedNotes.filter((n) => n.id !== noteId);
+  renderNotesSidebar();
+  deferNextPoll();
+
+  try {
+    const res = await apiPost(
+      'deletePinnedNote',
+      { channelId: ch.id, noteId },
+      { token: state.token }
+    );
+    if (Array.isArray(res.pinnedNotes)) {
+      ch.pinnedNotes = res.pinnedNotes;
+      renderNotesSidebar();
+    }
+  } catch (err) {
+    ch.pinnedNotes = prevNotes;
+    renderNotesSidebar();
+    showToast('移除便條失敗：' + err.message, 'error');
+  }
+}
+
+function handleMoveNote(fromIdx, toIdx) {
+  const ch = getCurrentChannel();
+  if (!ch || !Array.isArray(ch.pinnedNotes)) return;
+  if (toIdx < 0 || toIdx >= ch.pinnedNotes.length) return;
+  const prevNotes = ch.pinnedNotes.slice();
+  const [moved] = ch.pinnedNotes.splice(fromIdx, 1);
+  ch.pinnedNotes.splice(toIdx, 0, moved);
+  renderNotesSidebar();
+  persistNoteOrder(ch, prevNotes);
+}
+
+function reorderNotesByIds(fromId, toId) {
+  const ch = getCurrentChannel();
+  if (!ch || !Array.isArray(ch.pinnedNotes)) return;
+  const fromIdx = ch.pinnedNotes.findIndex((n) => n.id === fromId);
+  const toIdx = ch.pinnedNotes.findIndex((n) => n.id === toId);
+  if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+  const prevNotes = ch.pinnedNotes.slice();
+  const [moved] = ch.pinnedNotes.splice(fromIdx, 1);
+  ch.pinnedNotes.splice(toIdx, 0, moved);
+  renderNotesSidebar();
+  persistNoteOrder(ch, prevNotes);
+}
+
+async function persistNoteOrder(ch, prevNotes) {
+  deferNextPoll();
+  try {
+    const order = ch.pinnedNotes.map((n) => n.id);
+    const res = await apiPost(
+      'reorderPinnedNotes',
+      { channelId: ch.id, order },
+      { token: state.token }
+    );
+    if (Array.isArray(res.pinnedNotes)) {
+      ch.pinnedNotes = res.pinnedNotes;
+      renderNotesSidebar();
+    }
+  } catch (err) {
+    ch.pinnedNotes = prevNotes;
+    renderNotesSidebar();
+    showToast('排序儲存失敗：' + err.message, 'error');
+  }
+}
+
 // ==================== 工具函式 ====================
 function renderSafeTextWithLinks(container, text) {
   const regex = /(https?:\/\/[^\s<>"']+)/g;
@@ -2919,6 +3486,9 @@ function clearSession() {
   state.renderedChannelId = null;
   state.consecutiveSyncErrors = 0;
   state.globalVersion = 0;
+  state.editingNoteId = null;
+  state.draggingNoteId = null;
+  closeNoteComposer();
   clearReplyTarget();
   cancelEditMode();
   clearPendingImage();

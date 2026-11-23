@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=18" />
+  <link rel="stylesheet" href="css/style.css?v=20" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -153,6 +153,11 @@
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </button>
+          <!-- 右側重點便條紙開關 -->
+          <button id="toggle-notes-btn" class="icon-btn notes-toggle-btn" type="button" title="展開／收合右側重點便條紙" aria-label="重點便條紙">
+            <span aria-hidden="true">📌</span>
+            <span id="notes-count-badge" class="notes-count-badge hidden">0</span>
+          </button>
           <span id="sync-status" class="sync-status" title="同步狀態">
             <span class="status-dot"></span>
           </span>
@@ -258,6 +263,40 @@
         </div>
       </footer>
     </main>
+
+    <!-- 右側重點便條紙欄 -->
+    <aside id="notes-sidebar" class="notes-sidebar" aria-label="重點便條紙">
+      <div class="notes-header">
+        <div class="notes-title-group">
+          <span>📌 重點便條</span>
+          <span class="notes-drag-hint">可拖曳排序</span>
+        </div>
+        <div class="notes-header-actions">
+          <button id="add-note-btn" class="btn btn-primary btn-xs" type="button">＋ 新增</button>
+          <button id="close-notes-btn" class="icon-btn icon-btn-xs mobile-only" type="button" aria-label="關閉便條欄">✕</button>
+        </div>
+      </div>
+
+      <!-- 新增便條編輯框 -->
+      <div id="note-composer" class="note-composer hidden">
+        <textarea id="note-composer-input" rows="3" maxlength="600" placeholder="寫下頻道重點、待辦事項或重要連結…"></textarea>
+        <div class="note-composer-footer">
+          <div id="note-composer-colors" class="note-color-dots" aria-label="選擇便條顏色">
+            <button type="button" class="note-color-dot active" data-color="yellow" title="黃色"></button>
+            <button type="button" class="note-color-dot" data-color="blue" title="藍色"></button>
+            <button type="button" class="note-color-dot" data-color="green" title="綠色"></button>
+            <button type="button" class="note-color-dot" data-color="pink" title="粉色"></button>
+            <button type="button" class="note-color-dot" data-color="purple" title="紫色"></button>
+          </div>
+          <div class="inline-row">
+            <button id="note-composer-cancel" class="mini-btn" type="button">取消</button>
+            <button id="note-composer-save" class="btn btn-primary btn-xs" type="button">貼上</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="notes-list" class="notes-list"></div>
+    </aside>
   </div>
 
   <!-- ==================== 彈窗：建立頻道 ==================== -->
@@ -490,6 +529,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=19"></script>
+  <script type="module" src="js/app.js?v=20"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 /**
  * 瀏覽器桌面通知（跳出視窗）、Web Audio 提示音與通知顯示格式模組
  */
-import { CONFIG } from './config.js?v=17';
+import { CONFIG } from './config.js?v=20';
 
 const NOTIFY_KEY = CONFIG.STORAGE_PREFIX + 'notify_enabled';
 const SOUND_KEY = CONFIG.STORAGE_PREFIX + 'notify_sound';

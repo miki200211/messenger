@@ -69,6 +69,7 @@ const HEADERS = {
     'last_message_at',
     'updated_at',
     'last_sender_id',
+    'pinned_notes_json',
   ],
   Messages: [
     'msg_id',
@@ -105,7 +106,16 @@ const ALLOWED_AVATAR_PRESETS = {
   monkey: true,
 };
 
-const SCHEMA_VERSION = 'v5';
+const ALLOWED_NOTE_COLORS = {
+  yellow: true,
+  blue: true,
+  green: true,
+  pink: true,
+  purple: true,
+};
+const MAX_CHANNEL_NOTES = 50;
+
+const SCHEMA_VERSION = 'v6';
 let _reqSs = null;
 let _reqImgFolder = null;
 
@@ -163,6 +173,14 @@ function doPost(e) {
         return jsonOut_(handleResetInviteCode_(body));
       case 'updateChannel':
         return jsonOut_(handleUpdateChannel_(body));
+      case 'addPinnedNote':
+        return jsonOut_(handleAddPinnedNote_(body));
+      case 'updatePinnedNote':
+        return jsonOut_(handleUpdatePinnedNote_(body));
+      case 'deletePinnedNote':
+        return jsonOut_(handleDeletePinnedNote_(body));
+      case 'reorderPinnedNotes':
+        return jsonOut_(handleReorderPinnedNotes_(body));
       case 'syncMessages':
         return jsonOut_(handleSyncMessages_(body));
       case 'sendMessage':
@@ -546,6 +564,7 @@ function handleCreateChannel_(body) {
       now,
       now,
       toSheetText_(auth.user.id),
+      '[]',
     ]);
 
     cacheChannelMeta_(channelId, {
@@ -572,6 +591,7 @@ function handleCreateChannel_(body) {
         lastMessageAt: now,
         updatedAt: now,
         lastSenderId: auth.user.id,
+        pinnedNotes: [],
       },
     };
   });
@@ -759,6 +779,171 @@ function handleUpdateChannel_(body) {
       globalVersion: now,
     };
   });
+}
+
+// ============================================================================
+// 右側重點便條紙（置頂留言與待辦排序）API
+// ============================================================================
+
+function handleAddPinnedNote_(body) {
+  const text = String(body.text || '').trim().slice(0, 600);
+  if (!text) return { ok: false, error: '便條內容不可為空' };
+
+  const color = ALLOWED_NOTE_COLORS[body.color] ? String(body.color) : 'yellow';
+  const msgId = String(body.msgId || '').trim().slice(0, 64);
+  const msgSender = String(body.msgSender || '').trim().slice(0, 40);
+  const msgType = String(body.msgType || 'note').trim().slice(0, 16);
+  const fileId = String(body.fileId || '').trim().slice(0, 80);
+
+  return withChannelNotes_(body, function (notes, auth) {
+    if (msgId) {
+      // 若同一則訊息已經置頂過，移到最上方並更新文字即可，避免重複釘選
+      const existingIdx = notes.findIndex(function (n) { return n.msgId === msgId; });
+      if (existingIdx >= 0) {
+        const existing = notes.splice(existingIdx, 1)[0];
+        existing.text = text;
+        existing.color = color;
+        notes.unshift(existing);
+        return { ok: true, notes: notes, note: existing };
+      }
+    }
+
+    const note = {
+      id: 'n_' + Date.now() + '_' + randomId_(4),
+      text: text,
+      color: color,
+      msgId: msgId,
+      msgSender: msgSender,
+      msgType: msgType || 'note',
+      fileId: fileId,
+      createdBy: auth.user.id,
+      createdByName: auth.user.displayName,
+      createdAt: Date.now(),
+    };
+    notes.unshift(note);
+    if (notes.length > MAX_CHANNEL_NOTES) {
+      notes = notes.slice(0, MAX_CHANNEL_NOTES);
+    }
+    return { ok: true, notes: notes, note: note };
+  });
+}
+
+function handleUpdatePinnedNote_(body) {
+  const noteId = String(body.noteId || '').trim();
+  if (!noteId) return { ok: false, error: '缺少便條 ID' };
+
+  const hasText = body.text !== undefined && body.text !== null;
+  const nextText = hasText ? String(body.text).trim().slice(0, 600) : '';
+  if (hasText && !nextText) return { ok: false, error: '便條內容不可為空' };
+
+  const hasColor = body.color !== undefined && body.color !== null;
+  if (hasColor && !ALLOWED_NOTE_COLORS[body.color]) {
+    return { ok: false, error: '無效的便條顏色' };
+  }
+
+  return withChannelNotes_(body, function (notes) {
+    const target = notes.find(function (n) { return n.id === noteId; });
+    if (!target) return { ok: false, error: '找不到該便條紙' };
+
+    if (hasText) target.text = nextText;
+    if (hasColor) target.color = String(body.color);
+    return { ok: true, notes: notes, note: target };
+  });
+}
+
+function handleDeletePinnedNote_(body) {
+  const noteId = String(body.noteId || '').trim();
+  if (!noteId) return { ok: false, error: '缺少便條 ID' };
+
+  return withChannelNotes_(body, function (notes) {
+    const next = notes.filter(function (n) { return n.id !== noteId; });
+    return { ok: true, notes: next };
+  });
+}
+
+function handleReorderPinnedNotes_(body) {
+  const order = Array.isArray(body.order) ? body.order : null;
+  if (!order) return { ok: false, error: '缺少排序清單' };
+
+  return withChannelNotes_(body, function (notes) {
+    const map = {};
+    for (let i = 0; i < notes.length; i++) {
+      map[notes[i].id] = notes[i];
+    }
+    const reordered = [];
+    const seen = {};
+    for (let i = 0; i < order.length; i++) {
+      const id = String(order[i] || '').trim();
+      if (!id || seen[id] || !map[id]) continue;
+      seen[id] = true;
+      reordered.push(map[id]);
+    }
+    // 保留其他人同時新增、尚未在前端順序清單裡的便條
+    for (let i = 0; i < notes.length; i++) {
+      if (!seen[notes[i].id]) {
+        reordered.push(notes[i]);
+      }
+    }
+    return { ok: true, notes: reordered };
+  });
+}
+
+function withChannelNotes_(body, mutator) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const channelId = String(body.channelId || '').trim();
+  if (!channelId) return { ok: false, error: '缺少頻道 ID' };
+
+  return withLock_(function () {
+    const chInfo = findChannelForMemberFast_(channelId, auth.user.id);
+    if (!chInfo.ok) return chInfo;
+
+    const ss = ensureSpreadsheet_();
+    const chSheet = ss.getSheetByName(SHEETS.CHANNELS);
+    const rawNotes = chSheet.getRange(chInfo.rowNum, 12).getValue();
+    const notes = sanitizePinnedNotes_(safeJsonParse_(String(rawNotes || '[]'), []));
+
+    const res = mutator(notes, auth);
+    if (!res || !res.ok) return res;
+
+    const now = nextVersion_('global_ver');
+    chSheet.getRange(chInfo.rowNum, 10).setValue(now);
+    chSheet.getRange(chInfo.rowNum, 12).setValue(JSON.stringify(res.notes));
+    setChannelVersion_(channelId, now);
+
+    return {
+      ok: true,
+      pinnedNotes: res.notes,
+      note: res.note || null,
+      globalVersion: now,
+    };
+  });
+}
+
+function sanitizePinnedNotes_(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (let i = 0; i < raw.length && out.length < MAX_CHANNEL_NOTES; i++) {
+    const n = raw[i];
+    if (!n || typeof n !== 'object') continue;
+    const id = String(n.id || '').trim();
+    const text = String(n.text || '').trim().slice(0, 600);
+    if (!id || !text) continue;
+    out.push({
+      id: id,
+      text: text,
+      color: ALLOWED_NOTE_COLORS[n.color] ? String(n.color) : 'yellow',
+      msgId: String(n.msgId || '').slice(0, 64),
+      msgSender: String(n.msgSender || '').slice(0, 40),
+      msgType: String(n.msgType || 'note').slice(0, 16),
+      fileId: String(n.fileId || '').slice(0, 80),
+      createdBy: String(n.createdBy || ''),
+      createdByName: String(n.createdByName || ''),
+      createdAt: Number(n.createdAt || 0),
+    });
+  }
+  return out;
 }
 
 // ============================================================================
@@ -1619,6 +1804,7 @@ function formatChannelRow_(row, viewerUserId) {
     lastMessageAt: Number(row[8] || 0),
     updatedAt: Number(row[9] || 0),
     lastSenderId: String(row[10] || ''),
+    pinnedNotes: sanitizePinnedNotes_(safeJsonParse_(String(row[11] || '[]'), [])),
   };
 }
 

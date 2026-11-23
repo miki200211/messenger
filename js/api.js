@@ -3,7 +3,7 @@
  * - 使用 Content-Type: text/plain 避開 CORS Preflight (OPTIONS)
  * - 內建逾時保護 (AbortController)、暫時性斷線自動重試（僅對冪等請求）
  */
-import { getGasUrl } from './config.js?v=17';
+import { getGasUrl } from './config.js?v=20';
 
 let onUnauthorized = null;
 
