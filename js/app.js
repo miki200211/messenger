@@ -68,6 +68,7 @@ const state = {
   globalVersion: 0,
   lastRead: loadJson(READ_KEY, {}),
   unreadTitleCount: 0,
+  pendingUnreadAnchor: null,    // { channelId, sinceTs } 切換頻道時跳轉到第一則未讀或最新訊息
   privacyMirror: false,
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
@@ -1452,12 +1453,18 @@ async function selectChannel(channelId) {
   closeReactionPicker();
   toggleSidebar(false);
 
+  const prevLastRead = Number(state.lastRead[channelId] || 0);
+  state.pendingUnreadAnchor = { channelId, sinceTs: prevLastRead };
+
   markCurrentChannelRead();
   renderChannelList();
   renderCurrentChannelView();
   renderMessages({ forceScrollBottom: true });
 
   await syncNow();
+  if (state.pendingUnreadAnchor && state.pendingUnreadAnchor.channelId === channelId) {
+    state.pendingUnreadAnchor = null;
+  }
 }
 
 function getCurrentChannel() {
@@ -2202,7 +2209,27 @@ function renderMessages({ forceScrollBottom = false, forceFull = false } = {}) {
 
   state.renderedChannelId = channelId;
 
-  if (forceScrollBottom) {
+  const anchor = state.pendingUnreadAnchor;
+  if (anchor && anchor.channelId === channelId) {
+    const firstUnread = anchor.sinceTs > 0
+      ? list.find((m) => Number(m.createdAt || 0) > anchor.sinceTs && !m.isDeleted && (!state.user || m.senderId !== state.user.id))
+      : null;
+    if (firstUnread) {
+      const unreadRow = els.messagesList.querySelector(`.msg-row[data-msg-id="${CSS.escape(firstUnread.id)}"]`);
+      if (unreadRow) {
+        unreadRow.scrollIntoView({ behavior: 'auto', block: 'start' });
+        unreadRow.classList.remove('msg-jump-highlight');
+        void unreadRow.offsetWidth;
+        unreadRow.classList.add('msg-jump-highlight');
+        state.pendingUnreadAnchor = null;
+        return;
+      }
+    }
+    if (Number(state.channelVersion.get(channelId) || 0) > 0) {
+      state.pendingUnreadAnchor = null;
+    }
+    scrollToBottom(false);
+  } else if (forceScrollBottom) {
     scrollToBottom(false);
   }
 }
@@ -3756,6 +3783,7 @@ function clearSession() {
   state.inFlightReactions.clear();
   state.reactionQueue.clear();
   state.renderedChannelId = null;
+  state.pendingUnreadAnchor = null;
   state.consecutiveSyncErrors = 0;
   state.globalVersion = 0;
   state.editingNoteId = null;
