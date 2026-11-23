@@ -267,6 +267,7 @@ const els = {
 init();
 
 async function init() {
+  initViewportHeight();
   initTheme();
   initLanguage();
   initPrivacyMirror();
@@ -297,6 +298,30 @@ async function init() {
     }
   } else {
     showAuthView();
+  }
+}
+
+function initViewportHeight() {
+  const vv = window.visualViewport;
+  const syncHeight = () => {
+    const h = vv ? vv.height : window.innerHeight;
+    if (h > 0) {
+      document.documentElement.style.setProperty('--app-height', `${Math.round(h)}px`);
+    }
+    if (state.token && document.activeElement === els.messageInput) {
+      scrollToBottom(false);
+    }
+  };
+  syncHeight();
+  if (vv) {
+    vv.addEventListener('resize', syncHeight);
+    vv.addEventListener('scroll', () => {
+      if (state.token && window.scrollY !== 0) {
+        window.scrollTo(0, 0);
+      }
+    });
+  } else {
+    window.addEventListener('resize', syncHeight);
   }
 }
 
