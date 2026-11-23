@@ -56,6 +56,7 @@ const HEADERS = {
     'last_active_at',
     'avatar',
     'notify_prefs_json',
+    'sessions_json',
   ],
   Channels: [
     'channel_id',
@@ -115,7 +116,7 @@ const ALLOWED_NOTE_COLORS = {
 };
 const MAX_CHANNEL_NOTES = 50;
 
-const SCHEMA_VERSION = 'v6';
+const SCHEMA_VERSION = 'v7';
 let _reqSs = null;
 let _reqImgFolder = null;
 
@@ -163,6 +164,8 @@ function doPost(e) {
         return jsonOut_(handleMe_(body));
       case 'logout':
         return jsonOut_(handleLogout_(body));
+      case 'logoutDevice':
+        return jsonOut_(handleLogoutDevice_(body));
       case 'getChannels':
         return jsonOut_(handleGetChannels_(body));
       case 'createChannel':
@@ -251,6 +254,9 @@ function handleRegister_(body) {
     const token = randomHex_(32);
     const tokenExpireAt = now + cfg.TOKEN_TTL_DAYS * 86400 * 1000;
     const avatarColor = AVATAR_COLORS[rows.length % AVATAR_COLORS.length];
+    const deviceType = sanitizeDeviceType_(body.deviceType);
+    const sessions = {};
+    sessions[deviceType] = { token: token, expiresAt: tokenExpireAt, loginAt: now };
 
     sheet.appendRow([
       toSheetText_(userId),
@@ -265,6 +271,7 @@ function handleRegister_(body) {
       toSheetText_(nowText),
       '',
       '',
+      toSheetText_(JSON.stringify(sessions)),
     ]);
 
     const user = {
@@ -278,7 +285,13 @@ function handleRegister_(body) {
     cacheUserToken_(token, user, tokenExpireAt);
     clearUserProfilesCache_();
 
-    return { ok: true, token: token, user: user };
+    return {
+      ok: true,
+      token: token,
+      deviceType: deviceType,
+      devices: formatDevicesSummary_(sessions, token),
+      user: user,
+    };
   });
 }
 
@@ -307,17 +320,27 @@ function handleLogin_(body) {
         return { ok: false, error: '帳號或密碼錯誤' };
       }
 
-      const oldToken = String(row[6] || '');
-      if (oldToken) clearTokenCache_(oldToken);
+      const deviceType = sanitizeDeviceType_(body.deviceType);
+      const sessions = parseUserSessions_(row);
+      if (sessions[deviceType] && sessions[deviceType].token) {
+        clearTokenCache_(sessions[deviceType].token);
+      }
 
       const now = Date.now();
       const token = randomHex_(32);
       const tokenExpireAt = now + cfg.TOKEN_TTL_DAYS * 86400 * 1000;
       const rowNum = i + 2;
 
+      sessions[deviceType] = {
+        token: token,
+        expiresAt: tokenExpireAt,
+        loginAt: now,
+      };
+
       sheet.getRange(rowNum, 7).setValue(toSheetText_(token));
       sheet.getRange(rowNum, 8).setValue(tokenExpireAt);
       sheet.getRange(rowNum, 10).setValue(toSheetText_(formatDateTime_(now)));
+      sheet.getRange(rowNum, 13).setValue(toSheetText_(JSON.stringify(sessions)));
 
       const user = {
         id: String(row[0]),
@@ -329,7 +352,13 @@ function handleLogin_(body) {
       };
       cacheUserToken_(token, user, tokenExpireAt);
 
-      return { ok: true, token: token, user: user };
+      return {
+        ok: true,
+        token: token,
+        deviceType: deviceType,
+        devices: formatDevicesSummary_(sessions, token),
+        user: user,
+      };
     }
 
     return { ok: false, error: '帳號或密碼錯誤' };
@@ -339,7 +368,11 @@ function handleLogin_(body) {
 function handleMe_(body) {
   const auth = requireAuth_(body.token);
   if (!auth.ok) return auth;
-  return { ok: true, user: auth.user };
+  return {
+    ok: true,
+    user: auth.user,
+    devices: getUserDevicesById_(auth.user.id, String(body.token || '').trim()),
+  };
 }
 
 function handleUpdateProfile_(body) {
@@ -437,8 +470,15 @@ function handleUpdateProfile_(body) {
         avatar: avatarValue,
         notifyPrefs: finalNotifyPrefs,
       };
+      const sessions = parseUserSessions_(rows[i]);
+      const curToken = String(body.token || '').trim();
       const expireAt = Number(rows[i][7] || 0);
-      cacheUserToken_(String(body.token || '').trim(), updatedUser, expireAt);
+      if (curToken) cacheUserToken_(curToken, updatedUser, expireAt);
+      ['mobile', 'desktop'].forEach(function (slot) {
+        if (sessions[slot] && sessions[slot].token) {
+          cacheUserToken_(sessions[slot].token, updatedUser, sessions[slot].expiresAt);
+        }
+      });
       clearUserProfilesCache_();
 
       const freshProfiles = getAllUserProfiles_(ss);
@@ -491,13 +531,65 @@ function handleLogout_(body) {
     const sheet = ss.getSheetByName(SHEETS.USERS);
     const rows = getDataRows_(sheet);
     for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][6]) === token) {
-        sheet.getRange(i + 2, 7).setValue('');
-        sheet.getRange(i + 2, 8).setValue(0);
+      const row = rows[i];
+      const sessions = parseUserSessions_(row);
+      let matched = false;
+      ['mobile', 'desktop'].forEach(function (slot) {
+        if (sessions[slot] && sessions[slot].token === token) {
+          delete sessions[slot];
+          matched = true;
+        }
+      });
+      if (matched || String(row[6]) === token) {
+        const rowNum = i + 2;
+        if (String(row[6]) === token) {
+          sheet.getRange(rowNum, 7).setValue('');
+          sheet.getRange(rowNum, 8).setValue(0);
+        }
+        sheet.getRange(rowNum, 13).setValue(toSheetText_(JSON.stringify(sessions)));
         break;
       }
     }
     return { ok: true };
+  });
+}
+
+function handleLogoutDevice_(body) {
+  const auth = requireAuth_(body.token);
+  if (!auth.ok) return auth;
+
+  const targetSlot = sanitizeDeviceType_(body.targetDevice);
+  const currentToken = String(body.token || '').trim();
+
+  return withLock_(function () {
+    const ss = ensureSpreadsheet_();
+    const sheet = ss.getSheetByName(SHEETS.USERS);
+    const rows = getDataRows_(sheet);
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (String(row[0]) !== auth.user.id) continue;
+
+      const rowNum = i + 2;
+      const sessions = parseUserSessions_(row);
+      const removed = sessions[targetSlot];
+      let loggedOutSelf = false;
+      if (removed && removed.token) {
+        clearTokenCache_(removed.token);
+        if (removed.token === currentToken) loggedOutSelf = true;
+        if (String(row[6]) === removed.token) {
+          sheet.getRange(rowNum, 7).setValue('');
+          sheet.getRange(rowNum, 8).setValue(0);
+        }
+        delete sessions[targetSlot];
+        sheet.getRange(rowNum, 13).setValue(toSheetText_(JSON.stringify(sessions)));
+      }
+      return {
+        ok: true,
+        loggedOutSelf: loggedOutSelf,
+        devices: formatDevicesSummary_(sessions, loggedOutSelf ? '' : currentToken),
+      };
+    }
+    return { ok: false, error: '找不到使用者資料' };
   });
 }
 
@@ -1615,10 +1707,24 @@ function requireAuth_(token) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (String(row[6]) !== t) continue;
+    const sessions = parseUserSessions_(row);
+    let matchedExpireAt = 0;
+    let matched = false;
 
-    const expireAt = Number(row[7] || 0);
-    if (expireAt > 0 && now > expireAt) {
+    if (sessions.mobile && sessions.mobile.token === t) {
+      matched = true;
+      matchedExpireAt = sessions.mobile.expiresAt;
+    } else if (sessions.desktop && sessions.desktop.token === t) {
+      matched = true;
+      matchedExpireAt = sessions.desktop.expiresAt;
+    } else if (String(row[6]) === t) {
+      matched = true;
+      matchedExpireAt = Number(row[7] || 0);
+    }
+
+    if (!matched) continue;
+
+    if (matchedExpireAt > 0 && now > matchedExpireAt) {
       return { ok: false, error: '登入已過期，請重新登入', code: 'UNAUTHORIZED' };
     }
 
@@ -1630,11 +1736,77 @@ function requireAuth_(token) {
       avatar: String(row[10] || ''),
       notifyPrefs: sanitizeNotifyPrefs_(safeJsonParse_(row[11], null)),
     };
-    cacheUserToken_(t, user, expireAt);
+    cacheUserToken_(t, user, matchedExpireAt);
     return { ok: true, user: user };
   }
 
   return { ok: false, error: '無效的登入狀態，請重新登入', code: 'UNAUTHORIZED' };
+}
+
+function sanitizeDeviceType_(raw) {
+  return String(raw || '').trim().toLowerCase() === 'mobile' ? 'mobile' : 'desktop';
+}
+
+function parseUserSessions_(row) {
+  const parsed = safeJsonParse_(row[12], {});
+  const out = {};
+  const now = Date.now();
+  ['mobile', 'desktop'].forEach(function (slot) {
+    const s = parsed && typeof parsed === 'object' ? parsed[slot] : null;
+    if (s && s.token && (!s.expiresAt || Number(s.expiresAt) > now)) {
+      out[slot] = {
+        token: String(s.token),
+        expiresAt: Number(s.expiresAt || 0),
+        loginAt: Number(s.loginAt || 0),
+      };
+    }
+  });
+  const legacyToken = String(row[6] || '').trim();
+  const legacyExp = Number(row[7] || 0);
+  if (legacyToken && (!legacyExp || legacyExp > now)) {
+    const alreadyInSessions =
+      (out.mobile && out.mobile.token === legacyToken) ||
+      (out.desktop && out.desktop.token === legacyToken);
+    if (!alreadyInSessions && !out.desktop) {
+      out.desktop = {
+        token: legacyToken,
+        expiresAt: legacyExp,
+        loginAt: 0,
+      };
+    }
+  }
+  return out;
+}
+
+function formatDevicesSummary_(sessions, currentToken) {
+  const now = Date.now();
+  const buildSlot = function (slot) {
+    const s = sessions && sessions[slot];
+    if (!s || !s.token || (s.expiresAt && Number(s.expiresAt) <= now)) {
+      return { active: false, loginAt: 0, isCurrent: false };
+    }
+    return {
+      active: true,
+      loginAt: Number(s.loginAt || 0),
+      isCurrent: Boolean(currentToken && s.token === currentToken),
+    };
+  };
+  return {
+    mobile: buildSlot('mobile'),
+    desktop: buildSlot('desktop'),
+  };
+}
+
+function getUserDevicesById_(userId, currentToken) {
+  const ss = ensureSpreadsheet_();
+  const sheet = ss.getSheetByName(SHEETS.USERS);
+  const rows = getDataRows_(sheet);
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(userId)) {
+      return formatDevicesSummary_(parseUserSessions_(rows[i]), currentToken);
+    }
+  }
+  return formatDevicesSummary_({}, currentToken);
 }
 
 function getAllUserProfiles_(ss) {

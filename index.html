@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=22" />
+  <link rel="stylesheet" href="css/style.css?v=23" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -397,12 +397,13 @@
           <input id="profile-displayname-input" type="text" maxlength="24" placeholder="輸入聊天室顯示的名稱" />
         </div>
         <div class="field">
-          <label class="field-label">登入裝置</label>
-          <div class="device-toggle-group" role="group" aria-label="登入裝置">
+          <label class="field-label">登入裝置（最多 2 台：手機 1 台＋電腦 1 台）</label>
+          <div class="device-toggle-group" role="group" aria-label="本機登入裝置類型">
             <button id="device-opt-mobile" class="device-toggle-btn" type="button" data-device="mobile">📱 手機</button>
             <button id="device-opt-desktop" class="device-toggle-btn" type="button" data-device="desktop">💻 電腦</button>
           </div>
-          <p class="hint-text" style="margin: 6px 0 0;">設定目前使用的登入裝置（僅提供手機或電腦），會顯示在左下角個人資訊中。</p>
+          <p class="hint-text" style="margin: 6px 0 8px;">登入手機不會踢掉電腦，最多同時登入 1 台手機＋1 台電腦。</p>
+          <div id="devices-status-list" class="devices-status-list"></div>
         </div>
         <div class="avatar-modal-top">
           <div id="avatar-modal-preview" class="avatar avatar-lg"></div>
@@ -537,6 +538,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=22"></script>
+  <script type="module" src="js/app.js?v=23"></script>
 </body>
 </html>

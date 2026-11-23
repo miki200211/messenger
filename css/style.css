@@ -632,6 +632,51 @@ button {
   color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
+.devices-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.device-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-app);
+  font-size: 12.5px;
+}
+.device-status-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.device-status-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.device-status-meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.device-status-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-surface-hover);
+  color: var(--text-muted);
+}
+.device-status-badge.active {
+  background: rgba(34, 197, 94, 0.14);
+  color: #16a34a;
+}
+[data-theme="dark"] .device-status-badge.active {
+  color: #4ade80;
+}
 
 /* ==================== 右側主聊天區 ==================== */
 .chat-main {

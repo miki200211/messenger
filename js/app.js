@@ -63,6 +63,7 @@ const state = {
   unreadTitleCount: 0,
   privacyMirror: false,
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
+  devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
   replyTarget: null,            // { id, senderName, type, preview, fileId }
   editTarget: null,             // { id, type, originalText }
@@ -217,6 +218,7 @@ const els = {
   profileDisplayNameInput: $('profile-displayname-input'),
   deviceOptMobile: $('device-opt-mobile'),
   deviceOptDesktop: $('device-opt-desktop'),
+  devicesStatusList: $('devices-status-list'),
   profileSaveError: $('profile-save-error'),
   avatarModalPreview: $('avatar-modal-preview'),
   avatarUploadBtn: $('avatar-upload-btn'),
@@ -269,6 +271,7 @@ async function init() {
     try {
       const meRes = await apiPost('me', {}, { token: state.token });
       state.user = meRes.user;
+      if (meRes.devices) state.devices = meRes.devices;
       saveSession();
       renderMeProfile();
       await loadInitialData();
@@ -703,9 +706,11 @@ async function handleLoginSubmit(e) {
     const res = await apiPost('login', {
       username: els.loginUsername.value.trim(),
       password: els.loginPassword.value,
+      deviceType: getLoginDevice(),
     });
     state.token = res.token;
     state.user = res.user;
+    state.devices = res.devices || null;
     saveSession();
     els.loginPassword.value = '';
     enterAppView();
@@ -729,9 +734,11 @@ async function handleRegisterSubmit(e) {
       displayName: els.regDisplayName.value.trim(),
       password: els.regPassword.value,
       registerCode: els.regCode.value,
+      deviceType: getLoginDevice(),
     });
     state.token = res.token;
     state.user = res.user;
+    state.devices = res.devices || null;
     saveSession();
     els.regPassword.value = '';
     els.regCode.value = '';
@@ -861,9 +868,91 @@ function openAvatarModal() {
   els.avatarSaveBtn.disabled = true;
   els.avatarSaveBtn.textContent = '儲存設定';
   renderDeviceToggle(state.loginDeviceDraft);
+  renderDevicesStatusList();
   renderAvatarModalPreview();
   renderAvatarPresetGrid();
   openModal(els.modalAvatar);
+
+  // 背景向後端同步最新兩台裝置登入狀態
+  apiPost('me', {}, { token: state.token }).then((res) => {
+    if (res && res.devices) {
+      state.devices = res.devices;
+      if (!els.modalAvatar.classList.contains('hidden')) {
+        renderDevicesStatusList();
+      }
+    }
+  }).catch(() => {});
+}
+
+function renderDevicesStatusList() {
+  if (!els.devicesStatusList) return;
+  els.devicesStatusList.innerHTML = '';
+
+  const devices = state.devices || {};
+  const slots = [
+    { key: 'mobile', label: '📱 手機' },
+    { key: 'desktop', label: '💻 電腦' },
+  ];
+
+  for (const slot of slots) {
+    const info = devices[slot.key] || { active: false, loginAt: 0, isCurrent: false };
+    const row = document.createElement('div');
+    row.className = 'device-status-row';
+
+    const left = document.createElement('div');
+    left.className = 'device-status-info';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'device-status-name';
+    nameEl.textContent = slot.label;
+    left.appendChild(nameEl);
+
+    const badge = document.createElement('span');
+    badge.className = 'device-status-badge' + (info.active ? ' active' : '');
+    if (info.isCurrent) {
+      badge.textContent = '目前此裝置';
+    } else if (info.active) {
+      badge.textContent = '已登入';
+    } else {
+      badge.textContent = '未登入';
+    }
+    left.appendChild(badge);
+
+    if (info.active && info.loginAt) {
+      const meta = document.createElement('span');
+      meta.className = 'device-status-meta';
+      meta.textContent = formatTime(info.loginAt);
+      left.appendChild(meta);
+    }
+
+    row.appendChild(left);
+
+    if (info.active && !info.isCurrent) {
+      const logoutBtn = document.createElement('button');
+      logoutBtn.type = 'button';
+      logoutBtn.className = 'mini-btn';
+      logoutBtn.textContent = '登出';
+      logoutBtn.addEventListener('click', () => handleLogoutDevice(slot.key, logoutBtn));
+      row.appendChild(logoutBtn);
+    }
+
+    els.devicesStatusList.appendChild(row);
+  }
+}
+
+async function handleLogoutDevice(targetDevice, btn) {
+  if (!state.token) return;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiPost('logoutDevice', { targetDevice }, { token: state.token });
+    if (res.devices) state.devices = res.devices;
+    renderDevicesStatusList();
+    const label = targetDevice === 'mobile' ? '手機' : '電腦';
+    showToast(`已登出${label}裝置`, 'info');
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    showToast('登出裝置失敗：' + err.message, 'error');
+  }
 }
 
 function renderAvatarModalPreview() {
@@ -3543,6 +3632,7 @@ function saveSession() {
 function clearSession() {
   state.token = '';
   state.user = null;
+  state.devices = null;
   state.userProfiles = {};
   state.channels = [];
   state.currentChannelId = null;
