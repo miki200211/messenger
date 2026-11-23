@@ -601,6 +601,9 @@ function bindEvents() {
     if (!e.target.closest('.msg-bubble-wrap')) {
       document.querySelectorAll('.msg-row.touch-active').forEach((n) => n.classList.remove('touch-active'));
     }
+    if (!e.target.closest('.note-card')) {
+      document.querySelectorAll('.note-card.touch-active').forEach((n) => n.classList.remove('touch-active'));
+    }
   });
 
   // 全域快捷鍵：Alt+M 切換防偷窺鏡像、Esc 關閉彈窗/面板
@@ -2974,7 +2977,17 @@ function buildNoteCard(note, index, total) {
   card.dataset.noteId = note.id;
 
   const isEditing = state.editingNoteId === note.id;
+  if (isEditing) card.classList.add('editing');
   card.draggable = !isEditing;
+
+  // 手機／觸控裝置點擊便條紙切換暫時顯示（搭配防偷窺鏡像模式）
+  card.addEventListener('click', (e) => {
+    if (!state.privacyMirror || isEditing) return;
+    if (e.target.closest('button, a, textarea, input')) return;
+    const active = card.classList.contains('touch-active');
+    document.querySelectorAll('.note-card.touch-active').forEach((n) => n.classList.remove('touch-active'));
+    if (!active) card.classList.add('touch-active');
+  });
 
   // 拖曳排序事件
   card.addEventListener('dragstart', (e) => {

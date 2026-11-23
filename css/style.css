@@ -1788,12 +1788,16 @@ button {
 .app-view.privacy-mirror .messages-list .msg-image-caption,
 .app-view.privacy-mirror .messages-list .msg-quote-text,
 .app-view.privacy-mirror .messages-list .msg-sender,
-.app-view.privacy-mirror .messages-list .msg-sticker-img {
+.app-view.privacy-mirror .messages-list .msg-sticker-img,
+.app-view.privacy-mirror .notes-sidebar .note-card:not(.editing) .note-source-tag,
+.app-view.privacy-mirror .notes-sidebar .note-card:not(.editing) .note-card-text,
+.app-view.privacy-mirror .notes-sidebar .note-card:not(.editing) .note-card-footer {
   transform: scale(-1, -1);
   transition: transform 0.16s ease;
 }
 
-.app-view.privacy-mirror .messages-list .msg-image {
+.app-view.privacy-mirror .messages-list .msg-image,
+.app-view.privacy-mirror .notes-sidebar .note-card:not(.editing) .note-card-thumb {
   filter: blur(10px);
   transform: scale(-1, -1);
   transition: filter 0.18s ease, transform 0.18s ease;
@@ -1808,12 +1812,20 @@ button {
 .app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-image-caption,
 .app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-quote-text,
 .app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-sender,
-.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-sticker-img {
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-sticker-img,
+.app-view.privacy-mirror .notes-sidebar .note-card:hover .note-source-tag,
+.app-view.privacy-mirror .notes-sidebar .note-card:hover .note-card-text,
+.app-view.privacy-mirror .notes-sidebar .note-card:hover .note-card-footer,
+.app-view.privacy-mirror .notes-sidebar .note-card.touch-active .note-source-tag,
+.app-view.privacy-mirror .notes-sidebar .note-card.touch-active .note-card-text,
+.app-view.privacy-mirror .notes-sidebar .note-card.touch-active .note-card-footer {
   transform: scale(1, 1);
 }
 
 .app-view.privacy-mirror .messages-list .msg-row:hover .msg-image,
-.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-image {
+.app-view.privacy-mirror .messages-list .msg-row.touch-active .msg-image,
+.app-view.privacy-mirror .notes-sidebar .note-card:hover .note-card-thumb,
+.app-view.privacy-mirror .notes-sidebar .note-card.touch-active .note-card-thumb {
   filter: none;
   transform: scale(1, 1);
 }
