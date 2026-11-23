@@ -41,6 +41,7 @@ const THEME_KEY = CONFIG.STORAGE_PREFIX + 'theme';
 const LAST_CHANNEL_KEY = CONFIG.STORAGE_PREFIX + 'last_channel';
 const PRIVACY_KEY = CONFIG.STORAGE_PREFIX + 'privacy_mirror';
 const NOTES_OPEN_KEY = CONFIG.STORAGE_PREFIX + 'notes_open';
+const LOGIN_DEVICE_KEY = CONFIG.STORAGE_PREFIX + 'login_device';
 
 const AVATAR_PALETTE = [
   '#5B5FC7', '#2D7D9A', '#038387', '#498205', '#C239B3',
@@ -61,6 +62,7 @@ const state = {
   lastRead: loadJson(READ_KEY, {}),
   unreadTitleCount: 0,
   privacyMirror: false,
+  loginDeviceDraft: '',         // 'mobile' | 'desktop'
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
   replyTarget: null,            // { id, senderName, type, preview, fileId }
   editTarget: null,             // { id, type, originalText }
@@ -213,6 +215,8 @@ const els = {
 
   modalAvatar: $('modal-avatar'),
   profileDisplayNameInput: $('profile-displayname-input'),
+  deviceOptMobile: $('device-opt-mobile'),
+  deviceOptDesktop: $('device-opt-desktop'),
   profileSaveError: $('profile-save-error'),
   avatarModalPreview: $('avatar-modal-preview'),
   avatarUploadBtn: $('avatar-upload-btn'),
@@ -395,6 +399,14 @@ function bindEvents() {
       e.preventDefault();
       if (!els.avatarSaveBtn.disabled) handleSaveAvatar();
     }
+  });
+  [els.deviceOptMobile, els.deviceOptDesktop].forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.device === 'mobile' ? 'mobile' : 'desktop';
+      state.loginDeviceDraft = next;
+      renderDeviceToggle(next);
+      updateProfileSaveBtnState();
+    });
   });
 
   // 手機側邊欄 & 右側重點便條紙欄
@@ -775,6 +787,34 @@ function applyUserAvatar(el, { userId, displayName, fallbackColor = '' } = {}) {
   });
 }
 
+function detectDefaultLoginDevice() {
+  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const uaMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+  return (coarse || uaMobile) ? 'mobile' : 'desktop';
+}
+
+function getLoginDevice() {
+  const saved = localStorage.getItem(LOGIN_DEVICE_KEY);
+  if (saved === 'mobile' || saved === 'desktop') return saved;
+  return detectDefaultLoginDevice();
+}
+
+function setLoginDevice(device) {
+  const val = device === 'mobile' ? 'mobile' : 'desktop';
+  localStorage.setItem(LOGIN_DEVICE_KEY, val);
+  return val;
+}
+
+function getLoginDeviceLabel(device) {
+  return device === 'mobile' ? '📱 手機' : '💻 電腦';
+}
+
+function renderDeviceToggle(selected) {
+  const cur = selected === 'mobile' ? 'mobile' : 'desktop';
+  els.deviceOptMobile.classList.toggle('selected', cur === 'mobile');
+  els.deviceOptDesktop.classList.toggle('selected', cur === 'desktop');
+}
+
 function renderMeProfile() {
   if (!state.user) return;
   applyUserAvatar(els.meAvatar, {
@@ -783,7 +823,7 @@ function renderMeProfile() {
     fallbackColor: state.user.avatarColor,
   });
   els.meName.textContent = state.user.displayName;
-  els.meUsername.textContent = '@' + state.user.username;
+  els.meUsername.textContent = `@${state.user.username} · ${getLoginDeviceLabel(getLoginDevice())}`;
 }
 
 function resolveUserDisplayName(userId, fallbackName = '') {
@@ -803,7 +843,8 @@ function hasProfileChanges() {
   if (!state.user) return false;
   const typedName = els.profileDisplayNameInput.value.trim();
   const nameChanged = typedName.length > 0 && typedName !== state.user.displayName;
-  return Boolean(state.avatarDraft) || nameChanged;
+  const deviceChanged = Boolean(state.loginDeviceDraft) && state.loginDeviceDraft !== getLoginDevice();
+  return Boolean(state.avatarDraft) || nameChanged || deviceChanged;
 }
 
 function updateProfileSaveBtnState() {
@@ -814,10 +855,12 @@ function openAvatarModal() {
   if (!state.user) return;
   toggleSidebar(false);
   state.avatarDraft = null;
+  state.loginDeviceDraft = getLoginDevice();
   els.profileDisplayNameInput.value = state.user.displayName || '';
   els.profileSaveError.classList.add('hidden');
   els.avatarSaveBtn.disabled = true;
   els.avatarSaveBtn.textContent = '儲存設定';
+  renderDeviceToggle(state.loginDeviceDraft);
   renderAvatarModalPreview();
   renderAvatarPresetGrid();
   openModal(els.modalAvatar);
@@ -925,7 +968,16 @@ async function handleSaveAvatar() {
 
   const nameChanged = newName !== state.user.displayName;
   const draft = state.avatarDraft;
-  if (!nameChanged && !draft) return;
+  const deviceChanged = Boolean(state.loginDeviceDraft) && state.loginDeviceDraft !== getLoginDevice();
+  if (!nameChanged && !draft && !deviceChanged) return;
+
+  if (!nameChanged && !draft && deviceChanged) {
+    setLoginDevice(state.loginDeviceDraft);
+    renderMeProfile();
+    showToast(`登入裝置已設為「${getLoginDeviceLabel(getLoginDevice())}」`, 'success');
+    closeModal(els.modalAvatar);
+    return;
+  }
 
   setBtnLoading(els.avatarSaveBtn, true, '儲存中…');
   deferNextPoll();
@@ -972,6 +1024,9 @@ async function handleSaveAvatar() {
       renderCurrentChannelView();
     }
 
+    if (deviceChanged) {
+      setLoginDevice(state.loginDeviceDraft);
+    }
     state.avatarDraft = null;
     saveSession();
     renderMeProfile();

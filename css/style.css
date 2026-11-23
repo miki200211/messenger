@@ -602,6 +602,37 @@ button {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+.device-toggle-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.device-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.device-toggle-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+.device-toggle-btn.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
 /* ==================== 右側主聊天區 ==================== */
 .chat-main {
   flex: 1;
