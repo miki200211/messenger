@@ -283,6 +283,7 @@ function handleRegister_(body) {
       notifyPrefs: sanitizeNotifyPrefs_(null),
     };
     cacheUserToken_(token, user, tokenExpireAt);
+    SpreadsheetApp.flush();
     clearUserProfilesCache_();
 
     return {
@@ -479,6 +480,7 @@ function handleUpdateProfile_(body) {
           cacheUserToken_(sessions[slot].token, updatedUser, sessions[slot].expiresAt);
         }
       });
+      SpreadsheetApp.flush();
       clearUserProfilesCache_();
 
       const freshProfiles = getAllUserProfiles_(ss);
