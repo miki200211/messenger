@@ -1,6 +1,13 @@
 import { CONFIG, getGasUrl } from './config.js?v=20';
 import { apiPost, setUnauthorizedHandler } from './api.js?v=20';
 import {
+  getLanguage,
+  setLanguage,
+  getLanguageMeta,
+  t,
+  applyDomTranslations,
+} from './i18n.js?v=24';
+import {
   EMOJI_CATEGORIES,
   EMOJI_LIST,
   QUICK_EMOJIS,
@@ -228,6 +235,7 @@ const els = {
 
   modalSettings: $('modal-settings'),
   settingsForm: $('settings-form'),
+  settingLanguage: $('setting-language'),
   settingsPermBadge: $('settings-perm-badge'),
   settingDesktopNotify: $('setting-desktop-notify'),
   settingSoundNotify: $('setting-sound-notify'),
@@ -246,6 +254,13 @@ const els = {
   settingsSaveBtn: $('settings-save-btn'),
 
   toastContainer: $('toast-container'),
+
+  authLangBtn: $('auth-lang-btn'),
+  authLangLabel: $('auth-lang-label'),
+  authLangMenu: $('auth-lang-menu'),
+  langToggleBtn: $('lang-toggle-btn'),
+  appLangLabel: $('app-lang-label'),
+  langMenu: $('lang-menu'),
 };
 
 // ==================== 初始化 ====================
@@ -253,6 +268,7 @@ init();
 
 async function init() {
   initTheme();
+  initLanguage();
   initPrivacyMirror();
   initNotesPanel();
   renderNotifyBell();
@@ -281,6 +297,47 @@ async function init() {
     }
   } else {
     showAuthView();
+  }
+}
+
+function initLanguage() {
+  applyLanguage(getLanguage(), { silent: true });
+}
+
+function closeLangMenus() {
+  if (els.authLangMenu) els.authLangMenu.classList.add('hidden');
+  if (els.langMenu) els.langMenu.classList.add('hidden');
+}
+
+function applyLanguage(lang, { silent = false } = {}) {
+  const code = setLanguage(lang);
+  const meta = getLanguageMeta(code);
+
+  if (els.authLangLabel) els.authLangLabel.textContent = meta.short;
+  if (els.appLangLabel) els.appLangLabel.textContent = meta.short;
+  if (els.settingLanguage) els.settingLanguage.value = code;
+
+  document.querySelectorAll('.lang-option').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.lang === code);
+  });
+
+  applyDomTranslations();
+
+  if (state.user) {
+    renderMeProfile();
+    renderChannelList();
+    renderCurrentChannelView();
+    renderMessages();
+    if (!els.modalAvatar.classList.contains('hidden')) {
+      renderDevicesStatusList();
+    }
+    if (!els.modalSettings.classList.contains('hidden')) {
+      updateOutgoingSettingsPreview();
+    }
+  }
+
+  if (!silent) {
+    showToast(t('toastLangChanged', { label: meta.label }), 'info');
   }
 }
 
@@ -355,6 +412,32 @@ function bindEvents() {
 
   // 防偷窺鏡像開關
   els.privacyToggleBtn.addEventListener('click', togglePrivacyMirror);
+
+  // 地球語言切換（中 / 日 / 英）
+  [
+    { btn: els.authLangBtn, menu: els.authLangMenu },
+    { btn: els.langToggleBtn, menu: els.langMenu },
+  ].forEach(({ btn, menu }) => {
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = menu.classList.contains('hidden');
+      closeLangMenus();
+      if (willOpen) menu.classList.remove('hidden');
+    });
+    menu.addEventListener('click', (e) => {
+      const opt = e.target.closest('.lang-option');
+      if (!opt) return;
+      e.stopPropagation();
+      closeLangMenus();
+      applyLanguage(opt.dataset.lang);
+    });
+  });
+  if (els.settingLanguage) {
+    els.settingLanguage.addEventListener('change', () => {
+      applyLanguage(els.settingLanguage.value);
+    });
+  }
 
   // 鈴鐺通知開關 & 設定彈窗
   els.notifyToggleBtn.addEventListener('click', async () => {
@@ -619,6 +702,9 @@ function bindEvents() {
     if (!e.target.closest('.note-card')) {
       document.querySelectorAll('.note-card.touch-active').forEach((n) => n.classList.remove('touch-active'));
     }
+    if (!e.target.closest('.lang-picker-wrap')) {
+      closeLangMenus();
+    }
   });
 
   // 全域快捷鍵：Alt+M 切換防偷窺鏡像、Esc 關閉彈窗/面板
@@ -629,6 +715,7 @@ function bindEvents() {
       return;
     }
     if (e.key !== 'Escape') return;
+    closeLangMenus();
     if (!els.lightboxModal.classList.contains('hidden')) {
       closeLightbox();
       return;
@@ -813,7 +900,7 @@ function setLoginDevice(device) {
 }
 
 function getLoginDeviceLabel(device) {
-  return device === 'mobile' ? '📱 手機' : '💻 電腦';
+  return device === 'mobile' ? t('deviceMobile') : t('deviceDesktop');
 }
 
 function renderDeviceToggle(selected) {
@@ -890,8 +977,8 @@ function renderDevicesStatusList() {
 
   const devices = state.devices || {};
   const slots = [
-    { key: 'mobile', label: '📱 手機' },
-    { key: 'desktop', label: '💻 電腦' },
+    { key: 'mobile', label: t('deviceMobile') },
+    { key: 'desktop', label: t('deviceDesktop') },
   ];
 
   for (const slot of slots) {
@@ -910,11 +997,11 @@ function renderDevicesStatusList() {
     const badge = document.createElement('span');
     badge.className = 'device-status-badge' + (info.active ? ' active' : '');
     if (info.isCurrent) {
-      badge.textContent = '目前此裝置';
+      badge.textContent = t('deviceCurrent');
     } else if (info.active) {
-      badge.textContent = '已登入';
+      badge.textContent = t('deviceActive');
     } else {
-      badge.textContent = '未登入';
+      badge.textContent = t('deviceInactive');
     }
     left.appendChild(badge);
 
@@ -931,7 +1018,7 @@ function renderDevicesStatusList() {
       const logoutBtn = document.createElement('button');
       logoutBtn.type = 'button';
       logoutBtn.className = 'mini-btn';
-      logoutBtn.textContent = '登出';
+      logoutBtn.textContent = t('btnDeviceLogout');
       logoutBtn.addEventListener('click', () => handleLogoutDevice(slot.key, logoutBtn));
       row.appendChild(logoutBtn);
     }
@@ -1143,6 +1230,7 @@ function openSettingsModal() {
   els.settingSoundNotify.checked = local.soundEnabled;
   els.settingPopupTiming.value = local.popupTiming;
   els.settingRxPrivacy.value = local.receiverPrivacy;
+  if (els.settingLanguage) els.settingLanguage.value = getLanguage();
 
   const prefs = (state.user.notifyPrefs && typeof state.user.notifyPrefs === 'object')
     ? state.user.notifyPrefs
@@ -1357,7 +1445,7 @@ function renderChannelList() {
   if (state.channels.length === 0) {
     const hint = document.createElement('div');
     hint.className = 'channel-empty-hint';
-    hint.textContent = '還沒有加入任何頻道，點上方按鈕建立或輸入邀請碼加入。';
+    hint.textContent = t('noChannelsYet');
     els.channelList.appendChild(hint);
     return;
   }
@@ -1408,7 +1496,7 @@ function renderChannelList() {
 function renderCurrentChannelView() {
   const ch = getCurrentChannel();
   if (!ch) {
-    els.currentChannelName.textContent = '選擇或建立頻道';
+    els.currentChannelName.textContent = t('selectOrCreateChannel');
     els.channelMembersBtn.classList.add('hidden');
     els.ownerInviteBar.classList.add('hidden');
     els.emptyState.classList.remove('hidden');
@@ -1419,7 +1507,8 @@ function renderCurrentChannelView() {
   }
 
   els.currentChannelName.textContent = '# ' + ch.name;
-  els.channelMembersBtn.textContent = ch.isOwner ? `👥 ${ch.memberCount} 人 ⚙` : `👥 ${ch.memberCount} 人`;
+  const memLabel = t('memberCount', { n: ch.memberCount });
+  els.channelMembersBtn.textContent = ch.isOwner ? `👥 ${memLabel} ⚙` : `👥 ${memLabel}`;
   els.channelMembersBtn.title = ch.isOwner ? '頻道設定（修改名稱與管理成員）' : '檢視頻道成員';
   els.channelMembersBtn.classList.remove('hidden');
 
@@ -2003,7 +2092,7 @@ function renderMessages({ forceScrollBottom = false, forceFull = false } = {}) {
     els.messagesList.textContent = '';
     const empty = document.createElement('div');
     empty.className = 'messages-empty';
-    empty.textContent = '這個頻道還沒有訊息，發送第一則打個招呼吧！';
+    empty.textContent = t('noMessagesYet');
     els.messagesList.appendChild(empty);
     state.renderedChannelId = channelId;
     return;
@@ -3104,7 +3193,7 @@ function renderNotesSidebar() {
   if (notes.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'notes-empty';
-    empty.textContent = '目前還沒有重點便條。\n\n滑鼠移到聊天訊息上點「📌」，或按右上角「＋ 新增」即可貼上便條紙！';
+    empty.textContent = t('noNotesYet');
     els.notesList.appendChild(empty);
     return;
   }
