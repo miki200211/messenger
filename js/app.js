@@ -1345,37 +1345,36 @@ function openChannelInfoModal() {
   const memberSet = new Set(currentMemberIds);
 
   if (ch.isOwner) {
-    // 建立者檢視：列出所有已註冊使用者，可直接勾選新增或取消勾選移除
-    const allIdsSet = new Set([ch.ownerId, ...currentMemberIds, ...Object.keys(state.userProfiles)]);
-    const allIds = Array.from(allIdsSet).filter(Boolean);
+    // 建立者檢視：僅顯示已加入此頻道的成員，可取消勾選移出成員
+    const allIds = Array.from(memberSet).filter(Boolean);
 
-    // 排序：建立者最前 → 已在頻道內 → 其他未加入成員
+    // 排序：建立者最前，其餘成員依名稱排序
     allIds.sort((a, b) => {
       if (a === ch.ownerId) return -1;
       if (b === ch.ownerId) return 1;
-      const inA = memberSet.has(a) ? 0 : 1;
-      const inB = memberSet.has(b) ? 0 : 1;
-      if (inA !== inB) return inA - inB;
       const nameA = (state.userProfiles[a] && state.userProfiles[a].displayName) || a;
       const nameB = (state.userProfiles[b] && state.userProfiles[b].displayName) || b;
       return nameA.localeCompare(nameB, 'zh-Hant');
     });
 
+    els.infoMembersHint.textContent = allIds.length > 1
+      ? '僅顯示已加入此頻道的成員；取消勾選並儲存即可移出成員'
+      : '僅顯示已加入此頻道的成員；可將上方邀請碼分享給朋友加入';
+
     for (const uid of allIds) {
       const prof = state.userProfiles[uid];
       const isOwnerRow = uid === ch.ownerId;
-      const isChecked = isOwnerRow || memberSet.has(uid);
       const name = (prof && prof.displayName) || (isOwnerRow ? ch.ownerName : uid);
       const username = (prof && prof.username) || (uid === state.user.id ? state.user.username : '');
 
       const li = document.createElement('li');
-      li.className = 'member-toggle-item' + (isChecked ? ' is-checked' : '');
+      li.className = 'member-toggle-item is-checked';
 
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.className = 'member-checkbox';
       cb.value = uid;
-      cb.checked = isChecked;
+      cb.checked = true;
       if (isOwnerRow) cb.disabled = true;
 
       const av = document.createElement('span');
