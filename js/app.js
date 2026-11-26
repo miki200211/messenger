@@ -74,7 +74,8 @@ const state = {
   inputPrivacy: false,
   inputBlurTimer: null,
   isInputComposing: false,
-  inputReveal: null,            // { start, end } 暫時顯示最新輸入字元 0.3 秒
+  composingText: '',
+  inputReveal: null,            // { start, end } 暫時顯示最新輸入字元 0.2 秒
   prevInputValue: '',
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
@@ -431,7 +432,7 @@ function clearInputBlur() {
 function renderInputPrivacyMask() {
   if (!els.messageInput || !els.inputPrivacyMask) return;
   const val = els.messageInput.value;
-  if (!state.inputPrivacy || state.isInputComposing || !val) {
+  if (!state.inputPrivacy || !val) {
     els.messageInput.classList.remove('has-privacy-mask');
     els.inputPrivacyMask.classList.add('hidden');
     els.inputPrivacyMask.textContent = '';
@@ -473,7 +474,7 @@ function handleInputPrivacyChange(e) {
   const prev = state.prevInputValue || '';
   state.prevInputValue = val;
 
-  if (!state.inputPrivacy || state.isInputComposing || !val) {
+  if (!state.inputPrivacy || !val) {
     clearInputBlur();
     return;
   }
@@ -481,6 +482,16 @@ function handleInputPrivacyChange(e) {
   if (state.inputBlurTimer) {
     clearTimeout(state.inputBlurTimer);
     state.inputBlurTimer = null;
+  }
+
+  if (state.isInputComposing) {
+    const compLen = state.composingText ? state.composingText.length : 0;
+    const pos = els.messageInput.selectionStart ?? val.length;
+    state.inputReveal = compLen > 0
+      ? { start: Math.max(0, pos - compLen), end: pos }
+      : null;
+    renderInputPrivacyMask();
+    return;
   }
 
   const isDelete = e && typeof e.inputType === 'string' && e.inputType.startsWith('delete');
@@ -495,7 +506,7 @@ function handleInputPrivacyChange(e) {
       state.inputBlurTimer = null;
       state.inputReveal = null;
       renderInputPrivacyMask();
-    }, 300);
+    }, 200);
   } else {
     state.inputReveal = null;
   }
@@ -826,12 +837,37 @@ function bindEvents() {
   });
   els.messageInput.addEventListener('compositionstart', () => {
     state.isInputComposing = true;
+    state.composingText = '';
     state.prevInputValue = els.messageInput.value || '';
-    clearInputBlur();
   });
-  els.messageInput.addEventListener('compositionend', () => {
+  els.messageInput.addEventListener('compositionupdate', (e) => {
+    state.composingText = (e && e.data) ? String(e.data) : '';
+  });
+  els.messageInput.addEventListener('compositionend', (e) => {
     state.isInputComposing = false;
-    handleInputPrivacyChange({ inputType: 'insertFromComposition' });
+    state.composingText = '';
+    const committed = (e && e.data) ? String(e.data) : '';
+    if (committed && state.inputPrivacy && els.messageInput.value) {
+      if (state.inputBlurTimer) {
+        clearTimeout(state.inputBlurTimer);
+        state.inputBlurTimer = null;
+      }
+      const val = els.messageInput.value;
+      const pos = els.messageInput.selectionStart ?? val.length;
+      state.prevInputValue = val;
+      state.inputReveal = {
+        start: Math.max(0, pos - committed.length),
+        end: pos,
+      };
+      renderInputPrivacyMask();
+      state.inputBlurTimer = setTimeout(() => {
+        state.inputBlurTimer = null;
+        state.inputReveal = null;
+        renderInputPrivacyMask();
+      }, 200);
+    } else {
+      handleInputPrivacyChange({ inputType: 'insertFromComposition' });
+    }
   });
   els.messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {

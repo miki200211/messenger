@@ -1338,6 +1338,11 @@ button {
 .input-mask-blur {
   color: transparent;
   text-shadow: 0 0 9px var(--text-primary);
+  transition: color 0.12s ease, text-shadow 0.12s ease;
+}
+.composer-input-wrap:hover .input-mask-blur {
+  color: var(--text-primary);
+  text-shadow: none;
 }
 .input-mask-clear {
   color: var(--text-primary);
