@@ -47,6 +47,7 @@ const READ_KEY = CONFIG.STORAGE_PREFIX + 'last_read';
 const THEME_KEY = CONFIG.STORAGE_PREFIX + 'theme';
 const LAST_CHANNEL_KEY = CONFIG.STORAGE_PREFIX + 'last_channel';
 const PRIVACY_KEY = CONFIG.STORAGE_PREFIX + 'privacy_mirror';
+const INPUT_PRIVACY_KEY = CONFIG.STORAGE_PREFIX + 'input_privacy';
 const NOTES_OPEN_KEY = CONFIG.STORAGE_PREFIX + 'notes_open';
 const LOGIN_DEVICE_KEY = CONFIG.STORAGE_PREFIX + 'login_device';
 
@@ -70,6 +71,9 @@ const state = {
   unreadTitleCount: 0,
   pendingUnreadAnchor: null,    // { channelId, sinceTs } 切換頻道時跳轉到第一則未讀或最新訊息
   privacyMirror: false,
+  inputPrivacy: false,
+  inputBlurTimer: null,
+  isInputComposing: false,
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
@@ -167,6 +171,7 @@ const els = {
 
   toggleStickerBtn: $('toggle-sticker-btn'),
   uploadImageBtn: $('upload-image-btn'),
+  inputPrivacyBtn: $('input-privacy-btn'),
   imageFileInput: $('image-file-input'),
   stickerPopover: $('sticker-popover'),
   pickerTabSticker: $('picker-tab-sticker'),
@@ -272,6 +277,7 @@ async function init() {
   initTheme();
   initLanguage();
   initPrivacyMirror();
+  initInputPrivacy();
   initNotesPanel();
   renderNotifyBell();
   bindEvents();
@@ -403,6 +409,53 @@ function togglePrivacyMirror() {
       : '已關閉防偷窺鏡像模式',
     next ? 'success' : 'info'
   );
+}
+
+// ==================== 輸入框防窺（輸入後 1 秒模糊） ====================
+function initInputPrivacy() {
+  applyInputPrivacy(localStorage.getItem(INPUT_PRIVACY_KEY) === '1');
+}
+
+function clearInputBlur() {
+  if (state.inputBlurTimer) {
+    clearTimeout(state.inputBlurTimer);
+    state.inputBlurTimer = null;
+  }
+  if (els.messageInput) {
+    els.messageInput.classList.remove('is-input-blurred');
+  }
+}
+
+function resetInputBlurTimer() {
+  clearInputBlur();
+  if (!state.inputPrivacy || state.isInputComposing) return;
+  if (!els.messageInput || !els.messageInput.value) return;
+  state.inputBlurTimer = setTimeout(() => {
+    state.inputBlurTimer = null;
+    if (state.inputPrivacy && !state.isInputComposing && els.messageInput && els.messageInput.value) {
+      els.messageInput.classList.add('is-input-blurred');
+    }
+  }, 1000);
+}
+
+function applyInputPrivacy(enabled) {
+  state.inputPrivacy = Boolean(enabled);
+  localStorage.setItem(INPUT_PRIVACY_KEY, state.inputPrivacy ? '1' : '0');
+  if (els.inputPrivacyBtn) {
+    els.inputPrivacyBtn.classList.toggle('active', state.inputPrivacy);
+    els.inputPrivacyBtn.setAttribute('aria-pressed', state.inputPrivacy ? 'true' : 'false');
+  }
+  if (state.inputPrivacy) {
+    resetInputBlurTimer();
+  } else {
+    clearInputBlur();
+  }
+}
+
+function toggleInputPrivacy() {
+  const next = !state.inputPrivacy;
+  applyInputPrivacy(next);
+  showToast(t(next ? 'toastInputPrivacyOn' : 'toastInputPrivacyOff'), 'info');
 }
 
 function renderNotifyBell() {
@@ -687,8 +740,24 @@ function bindEvents() {
     renderStickerPopover();
   });
 
+  // 輸入框防窺獨立開關
+  if (els.inputPrivacyBtn) {
+    els.inputPrivacyBtn.addEventListener('click', toggleInputPrivacy);
+  }
+
   // 輸入框（注意中文組字 isComposing 避免誤送出）
-  els.messageInput.addEventListener('input', autoResizeInput);
+  els.messageInput.addEventListener('input', () => {
+    autoResizeInput();
+    resetInputBlurTimer();
+  });
+  els.messageInput.addEventListener('compositionstart', () => {
+    state.isInputComposing = true;
+    clearInputBlur();
+  });
+  els.messageInput.addEventListener('compositionend', () => {
+    state.isInputComposing = false;
+    resetInputBlurTimer();
+  });
   els.messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
@@ -3747,6 +3816,7 @@ function autoResizeInput() {
   const el = els.messageInput;
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 130) + 'px';
+  if (!el.value) clearInputBlur();
 }
 
 function insertAtCursor(textarea, value) {
@@ -3804,6 +3874,7 @@ function clearSession() {
   state.reactionQueue.clear();
   state.renderedChannelId = null;
   state.pendingUnreadAnchor = null;
+  clearInputBlur();
   state.consecutiveSyncErrors = 0;
   state.globalVersion = 0;
   state.editingNoteId = null;

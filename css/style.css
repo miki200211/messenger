@@ -1300,6 +1300,16 @@ button {
   max-height: 130px;
   padding: 6px 4px;
   line-height: 1.45;
+  transition: color 0.18s ease, text-shadow 0.18s ease;
+}
+.composer-box textarea.is-input-blurred {
+  color: transparent;
+  text-shadow: 0 0 9px var(--text-primary);
+  caret-color: var(--text-primary);
+}
+.composer-box textarea.is-input-blurred::placeholder {
+  color: var(--text-muted);
+  text-shadow: none;
 }
 .composer-tool.active {
   background: var(--accent-soft);
