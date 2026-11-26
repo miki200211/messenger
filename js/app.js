@@ -697,16 +697,17 @@ function bindEvents() {
   });
   els.sendBtn.addEventListener('click', handleComposerSubmit);
 
-  // 捲動到底部提示鈕
+  // 捲動到底部快速向下按鈕
   els.messagesList.addEventListener('scroll', () => {
+    updateScrollBottomBtn();
     if (isNearBottom()) {
-      els.scrollBottomBtn.classList.add('hidden');
       markCurrentChannelRead();
     }
   });
   els.scrollBottomBtn.addEventListener('click', () => {
     scrollToBottom(true);
     els.scrollBottomBtn.classList.add('hidden');
+    els.scrollBottomBtn.classList.remove('has-new');
     markCurrentChannelRead();
   });
 
@@ -1455,6 +1456,7 @@ async function selectChannel(channelId) {
 
   const prevLastRead = Number(state.lastRead[channelId] || 0);
   state.pendingUnreadAnchor = { channelId, sinceTs: prevLastRead };
+  els.scrollBottomBtn.classList.remove('has-new');
 
   markCurrentChannelRead();
   renderChannelList();
@@ -1964,7 +1966,7 @@ async function syncNow() {
         if (res.messages.length > 0 || isFirstLoad || profilesChanged) {
           renderMessages({ forceScrollBottom: isFirstLoad || (res.messages.length > 0 && wasAtBottom) });
           if (incomingFromOthers.length > 0 && !wasAtBottom) {
-            els.scrollBottomBtn.classList.remove('hidden');
+            updateScrollBottomBtn({ hasNew: true });
           }
         }
       }
@@ -2222,6 +2224,7 @@ function renderMessages({ forceScrollBottom = false, forceFull = false } = {}) {
         void unreadRow.offsetWidth;
         unreadRow.classList.add('msg-jump-highlight');
         state.pendingUnreadAnchor = null;
+        updateScrollBottomBtn();
         return;
       }
     }
@@ -2232,6 +2235,7 @@ function renderMessages({ forceScrollBottom = false, forceFull = false } = {}) {
   } else if (forceScrollBottom) {
     scrollToBottom(false);
   }
+  updateScrollBottomBtn();
 }
 
 function buildMessageRow(msg, compact, coreSig, reactSig) {
@@ -3721,6 +3725,22 @@ function scrollToBottom(smooth) {
     top: els.messagesList.scrollHeight,
     behavior: smooth ? 'smooth' : 'auto',
   });
+}
+
+function updateScrollBottomBtn({ hasNew = false } = {}) {
+  const el = els.messagesList;
+  if (!el || !state.currentChannelId || el.scrollHeight <= el.clientHeight + 20 || isNearBottom()) {
+    els.scrollBottomBtn.classList.add('hidden');
+    els.scrollBottomBtn.classList.remove('has-new');
+    return;
+  }
+  if (hasNew) {
+    els.scrollBottomBtn.classList.add('has-new');
+    els.scrollBottomBtn.textContent = t('btnScrollBottom');
+  } else if (!els.scrollBottomBtn.classList.contains('has-new')) {
+    els.scrollBottomBtn.textContent = t('btnScrollLatest');
+  }
+  els.scrollBottomBtn.classList.remove('hidden');
 }
 
 function autoResizeInput() {
