@@ -74,6 +74,8 @@ const state = {
   inputPrivacy: false,
   inputBlurTimer: null,
   isInputComposing: false,
+  inputReveal: null,            // { start, end } 暫時顯示最新輸入字元 0.3 秒
+  prevInputValue: '',
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
@@ -172,6 +174,7 @@ const els = {
   toggleStickerBtn: $('toggle-sticker-btn'),
   uploadImageBtn: $('upload-image-btn'),
   inputPrivacyBtn: $('input-privacy-btn'),
+  inputPrivacyMask: $('input-privacy-mask'),
   imageFileInput: $('image-file-input'),
   stickerPopover: $('sticker-popover'),
   pickerTabSticker: $('picker-tab-sticker'),
@@ -411,7 +414,7 @@ function togglePrivacyMirror() {
   );
 }
 
-// ==================== 輸入框防窺（輸入後 1 秒模糊） ====================
+// ==================== 輸入框防窺（逐字顯示 0.3 秒後模糊） ====================
 function initInputPrivacy() {
   applyInputPrivacy(localStorage.getItem(INPUT_PRIVACY_KEY) === '1');
 }
@@ -421,21 +424,83 @@ function clearInputBlur() {
     clearTimeout(state.inputBlurTimer);
     state.inputBlurTimer = null;
   }
-  if (els.messageInput) {
-    els.messageInput.classList.remove('is-input-blurred');
-  }
+  state.inputReveal = null;
+  renderInputPrivacyMask();
 }
 
-function resetInputBlurTimer() {
-  clearInputBlur();
-  if (!state.inputPrivacy || state.isInputComposing) return;
-  if (!els.messageInput || !els.messageInput.value) return;
-  state.inputBlurTimer = setTimeout(() => {
+function renderInputPrivacyMask() {
+  if (!els.messageInput || !els.inputPrivacyMask) return;
+  const val = els.messageInput.value;
+  if (!state.inputPrivacy || state.isInputComposing || !val) {
+    els.messageInput.classList.remove('has-privacy-mask');
+    els.inputPrivacyMask.classList.add('hidden');
+    els.inputPrivacyMask.textContent = '';
+    return;
+  }
+
+  els.messageInput.classList.add('has-privacy-mask');
+  els.inputPrivacyMask.classList.remove('hidden');
+
+  const frag = document.createDocumentFragment();
+  const rev = state.inputReveal;
+  const appendSpan = (text, cls) => {
+    if (!text) return;
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    frag.appendChild(s);
+  };
+
+  if (rev && rev.end > rev.start && rev.end <= val.length) {
+    appendSpan(val.slice(0, rev.start), 'input-mask-blur');
+    appendSpan(val.slice(rev.start, rev.end), 'input-mask-clear');
+    appendSpan(val.slice(rev.end), 'input-mask-blur');
+  } else {
+    appendSpan(val, 'input-mask-blur');
+  }
+  if (val.endsWith('\n')) {
+    frag.appendChild(document.createTextNode('\u200b'));
+  }
+
+  els.inputPrivacyMask.textContent = '';
+  els.inputPrivacyMask.appendChild(frag);
+  els.inputPrivacyMask.scrollTop = els.messageInput.scrollTop;
+}
+
+function handleInputPrivacyChange(e) {
+  if (!els.messageInput) return;
+  const val = els.messageInput.value;
+  const prev = state.prevInputValue || '';
+  state.prevInputValue = val;
+
+  if (!state.inputPrivacy || state.isInputComposing || !val) {
+    clearInputBlur();
+    return;
+  }
+
+  if (state.inputBlurTimer) {
+    clearTimeout(state.inputBlurTimer);
     state.inputBlurTimer = null;
-    if (state.inputPrivacy && !state.isInputComposing && els.messageInput && els.messageInput.value) {
-      els.messageInput.classList.add('is-input-blurred');
-    }
-  }, 1000);
+  }
+
+  const isDelete = e && typeof e.inputType === 'string' && e.inputType.startsWith('delete');
+  if (!isDelete) {
+    const pos = els.messageInput.selectionStart ?? val.length;
+    const added = Math.max(1, val.length - prev.length);
+    state.inputReveal = {
+      start: Math.max(0, pos - added),
+      end: pos,
+    };
+    state.inputBlurTimer = setTimeout(() => {
+      state.inputBlurTimer = null;
+      state.inputReveal = null;
+      renderInputPrivacyMask();
+    }, 300);
+  } else {
+    state.inputReveal = null;
+  }
+
+  renderInputPrivacyMask();
 }
 
 function applyInputPrivacy(enabled) {
@@ -445,11 +510,15 @@ function applyInputPrivacy(enabled) {
     els.inputPrivacyBtn.classList.toggle('active', state.inputPrivacy);
     els.inputPrivacyBtn.setAttribute('aria-pressed', state.inputPrivacy ? 'true' : 'false');
   }
-  if (state.inputPrivacy) {
-    resetInputBlurTimer();
-  } else {
-    clearInputBlur();
+  state.inputReveal = null;
+  if (state.inputBlurTimer) {
+    clearTimeout(state.inputBlurTimer);
+    state.inputBlurTimer = null;
   }
+  if (els.messageInput) {
+    state.prevInputValue = els.messageInput.value || '';
+  }
+  renderInputPrivacyMask();
 }
 
 function toggleInputPrivacy() {
@@ -746,17 +815,23 @@ function bindEvents() {
   }
 
   // 輸入框（注意中文組字 isComposing 避免誤送出）
-  els.messageInput.addEventListener('input', () => {
+  els.messageInput.addEventListener('input', (e) => {
     autoResizeInput();
-    resetInputBlurTimer();
+    handleInputPrivacyChange(e);
+  });
+  els.messageInput.addEventListener('scroll', () => {
+    if (els.inputPrivacyMask) {
+      els.inputPrivacyMask.scrollTop = els.messageInput.scrollTop;
+    }
   });
   els.messageInput.addEventListener('compositionstart', () => {
     state.isInputComposing = true;
+    state.prevInputValue = els.messageInput.value || '';
     clearInputBlur();
   });
   els.messageInput.addEventListener('compositionend', () => {
     state.isInputComposing = false;
-    resetInputBlurTimer();
+    handleInputPrivacyChange({ inputType: 'insertFromComposition' });
   });
   els.messageInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
@@ -3816,7 +3891,10 @@ function autoResizeInput() {
   const el = els.messageInput;
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 130) + 'px';
-  if (!el.value) clearInputBlur();
+  if (!el.value) {
+    state.prevInputValue = '';
+    clearInputBlur();
+  }
 }
 
 function insertAtCursor(textarea, value) {
