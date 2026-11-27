@@ -838,9 +838,32 @@ function handleUpdateChannel_(body) {
       // 限制分享時前端會自動透過 getImage 載入
     }
     uploadedBg = 'drive:' + file.getId();
-  } else if (bgMode !== '' && bgMode !== 'clear') {
+  } else if (bgMode !== '' && bgMode !== 'clear' && bgMode !== 'style') {
     return { ok: false, error: '不支援的背景設定方式' };
   }
+
+  const rawStyle = (body.bgStyle && typeof body.bgStyle === 'object') ? body.bgStyle : null;
+  const sanitizeBgStyle = function (st) {
+    const s = (st && typeof st === 'object') ? st : {};
+    const clamp = function (v, min, max, def) {
+      const n = Number(v);
+      return isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : def;
+    };
+    return {
+      posX: clamp(s.posX, 0, 100, 50),
+      posY: clamp(s.posY, 0, 100, 50),
+      zoom: clamp(s.zoom, 100, 250, 100),
+      fit: s.fit === 'contain' ? 'contain' : 'cover',
+      opacity: clamp(s.opacity, 10, 85, 28),
+    };
+  };
+  const extractExistingFileId = function (raw) {
+    const str = String(raw || '').trim();
+    if (!str) return '';
+    if (str.indexOf('drive:') === 0) return str.slice(6);
+    const parsed = safeJsonParse_(str, null);
+    return (parsed && parsed.fileId) ? String(parsed.fileId) : '';
+  };
 
   return withLock_(function () {
     const ss = ensureSpreadsheet_();
@@ -891,7 +914,16 @@ function handleUpdateChannel_(body) {
     if (bgMode === 'clear') {
       nextBackground = '';
     } else if (bgMode === 'upload' && uploadedBg) {
-      nextBackground = uploadedBg;
+      const st = sanitizeBgStyle(rawStyle);
+      st.fileId = uploadedBg.slice(6);
+      nextBackground = JSON.stringify(st);
+    } else if (bgMode === 'style') {
+      const existingId = extractExistingFileId(row[12]);
+      if (existingId) {
+        const st = sanitizeBgStyle(rawStyle);
+        st.fileId = existingId;
+        nextBackground = JSON.stringify(st);
+      }
     }
 
     const now = nextVersion_('global_ver');
@@ -899,7 +931,7 @@ function handleUpdateChannel_(body) {
     sheet.getRange(rowNum, 2).setValue(toSheetText_(newName));
     sheet.getRange(rowNum, 6, 1, 2).setValues([[JSON.stringify(nextMembers), toSheetText_(nextMemberNames.join(', '))]]);
     sheet.getRange(rowNum, 10).setValue(now);
-    if (bgMode === 'clear' || bgMode === 'upload') {
+    if (bgMode === 'clear' || bgMode === 'upload' || bgMode === 'style') {
       sheet.getRange(rowNum, 13).setValue(toSheetText_(nextBackground));
     }
 

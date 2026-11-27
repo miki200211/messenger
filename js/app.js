@@ -81,6 +81,8 @@ const state = {
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
   channelBgDraft: null,         // { mode: 'clear' } | { mode: 'upload', processed }
+  channelBgStyleDraft: null,    // { posX, posY, zoom, fit, opacity }
+  channelBgStyleChanged: false,
   replyTarget: null,            // { id, senderName, type, preview, fileId }
   editTarget: null,             // { id, type, originalText }
   pendingImage: null,           // { dataUrl, base64, mime, width, height, sizeBytes, name }
@@ -228,7 +230,18 @@ const els = {
   infoBgPreview: $('info-bg-preview'),
   infoBgUploadBtn: $('info-bg-upload-btn'),
   infoBgClearBtn: $('info-bg-clear-btn'),
+  infoBgResetPosBtn: $('info-bg-reset-pos-btn'),
   infoBgFileInput: $('info-bg-file-input'),
+  infoBgControls: $('info-bg-controls'),
+  infoBgFit: $('info-bg-fit'),
+  infoBgZoom: $('info-bg-zoom'),
+  infoBgZoomVal: $('info-bg-zoom-val'),
+  infoBgPosX: $('info-bg-pos-x'),
+  infoBgPosXVal: $('info-bg-pos-x-val'),
+  infoBgPosY: $('info-bg-pos-y'),
+  infoBgPosYVal: $('info-bg-pos-y-val'),
+  infoBgOpacity: $('info-bg-opacity'),
+  infoBgOpacityVal: $('info-bg-opacity-val'),
   infoChannelOwner: $('info-channel-owner'),
   infoInviteRow: $('info-invite-row'),
   infoInviteCode: $('info-invite-code'),
@@ -814,8 +827,62 @@ function bindEvents() {
   if (els.infoBgClearBtn) {
     els.infoBgClearBtn.addEventListener('click', () => {
       state.channelBgDraft = { mode: 'clear' };
+      state.channelBgStyleChanged = false;
       renderChannelBgPreview(getCurrentChannel());
     });
+  }
+  if (els.infoBgResetPosBtn) {
+    els.infoBgResetPosBtn.addEventListener('click', () => {
+      state.channelBgStyleDraft = { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+      state.channelBgStyleChanged = true;
+      syncBgStyleInputs();
+      updatePreviewImgStyle();
+    });
+  }
+  [els.infoBgFit, els.infoBgZoom, els.infoBgPosX, els.infoBgPosY, els.infoBgOpacity].forEach((el) => {
+    if (!el) return;
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      if (!state.channelBgStyleDraft) {
+        state.channelBgStyleDraft = { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+      }
+      state.channelBgStyleDraft = {
+        fit: els.infoBgFit && els.infoBgFit.value === 'contain' ? 'contain' : 'cover',
+        zoom: Number(els.infoBgZoom ? els.infoBgZoom.value : 100),
+        posX: Number(els.infoBgPosX ? els.infoBgPosX.value : 50),
+        posY: Number(els.infoBgPosY ? els.infoBgPosY.value : 50),
+        opacity: Number(els.infoBgOpacity ? els.infoBgOpacity.value : 28),
+      };
+      state.channelBgStyleChanged = true;
+      syncBgStyleInputs();
+      updatePreviewImgStyle();
+    });
+  });
+  if (els.infoBgPreview) {
+    let dragStart = null;
+    els.infoBgPreview.addEventListener('pointerdown', (e) => {
+      if (!els.infoBgPreview.classList.contains('has-img')) return;
+      e.preventDefault();
+      els.infoBgPreview.setPointerCapture(e.pointerId);
+      const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+      dragStart = { x: e.clientX, y: e.clientY, posX: st.posX, posY: st.posY };
+    });
+    els.infoBgPreview.addEventListener('pointermove', (e) => {
+      if (!dragStart) return;
+      const dx = e.clientX - dragStart.x;
+      const dy = e.clientY - dragStart.y;
+      const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
+      const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+      st.posX = clamp(dragStart.posX - dx * 0.45);
+      st.posY = clamp(dragStart.posY - dy * 0.45);
+      state.channelBgStyleDraft = st;
+      state.channelBgStyleChanged = true;
+      syncBgStyleInputs();
+      updatePreviewImgStyle();
+    });
+    const endDrag = () => { dragStart = null; };
+    els.infoBgPreview.addEventListener('pointerup', endDrag);
+    els.infoBgPreview.addEventListener('pointercancel', endDrag);
   }
 
   // Lightbox 大圖預覽關閉
@@ -1759,29 +1826,66 @@ function renderCurrentChannelView() {
   renderNotesSidebar();
 }
 
+function parseChannelBg(raw) {
+  const def = { fileId: '', posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+  const s = String(raw || '').trim();
+  if (!s) return def;
+  if (s.startsWith('drive:')) {
+    return { ...def, fileId: s.slice(6) };
+  }
+  try {
+    const obj = JSON.parse(s);
+    if (!obj || typeof obj !== 'object') return def;
+    const clamp = (v, min, max, d) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : d;
+    };
+    return {
+      fileId: String(obj.fileId || ''),
+      posX: clamp(obj.posX, 0, 100, 50),
+      posY: clamp(obj.posY, 0, 100, 50),
+      zoom: clamp(obj.zoom, 100, 250, 100),
+      fit: obj.fit === 'contain' ? 'contain' : 'cover',
+      opacity: clamp(obj.opacity, 10, 85, 28),
+    };
+  } catch {
+    return def;
+  }
+}
+
+function applyBgStyleToImg(img, cfg) {
+  if (!img || !cfg) return;
+  img.style.objectFit = cfg.fit === 'contain' ? 'contain' : 'cover';
+  img.style.objectPosition = `${cfg.posX}% ${cfg.posY}%`;
+  img.style.transformOrigin = `${cfg.posX}% ${cfg.posY}%`;
+  img.style.transform = cfg.zoom > 100 ? `scale(${(cfg.zoom / 100).toFixed(2)})` : '';
+  img.style.opacity = String((cfg.opacity / 100).toFixed(2));
+}
+
 function applyChatBackground(ch) {
   if (!els.chatBgLayer) return;
-  const bg = ch && ch.background ? String(ch.background) : '';
-  if (!bg || !bg.startsWith('drive:')) {
+  const cfg = parseChannelBg(ch && ch.background);
+  if (!cfg.fileId) {
     els.chatBgLayer.classList.add('hidden');
     delete els.chatBgLayer.dataset.bgId;
     if (els.chatBgImg) els.chatBgImg.removeAttribute('src');
     return;
   }
 
-  const fileId = bg.slice(6);
-  if (els.chatBgLayer.dataset.bgId === fileId && !els.chatBgLayer.classList.contains('hidden')) {
+  if (els.chatBgLayer.dataset.bgId === cfg.fileId && !els.chatBgLayer.classList.contains('hidden') && els.chatBgImg) {
+    applyBgStyleToImg(els.chatBgImg, cfg);
     return;
   }
 
-  els.chatBgLayer.dataset.bgId = fileId;
-  const img = createDriveImageEl(fileId, {
+  els.chatBgLayer.dataset.bgId = cfg.fileId;
+  const img = createDriveImageEl(cfg.fileId, {
     token: state.token,
     size: 1600,
     className: 'chat-bg-img',
     alt: '',
   });
   img.id = 'chat-bg-img';
+  applyBgStyleToImg(img, cfg);
   els.chatBgLayer.textContent = '';
   els.chatBgLayer.appendChild(img);
   els.chatBgImg = img;
@@ -1866,6 +1970,15 @@ function openChannelInfoModal() {
   els.infoChannelOwner.textContent = ch.ownerName || '建立者';
   els.infoChannelError.classList.add('hidden');
   state.channelBgDraft = null;
+  const curBgCfg = parseChannelBg(ch.background);
+  state.channelBgStyleDraft = {
+    posX: curBgCfg.posX,
+    posY: curBgCfg.posY,
+    zoom: curBgCfg.zoom,
+    fit: curBgCfg.fit,
+    opacity: curBgCfg.opacity,
+  };
+  state.channelBgStyleChanged = false;
 
   if (ch.isOwner) {
     els.infoNameEditBlock.classList.remove('hidden');
@@ -2013,35 +2126,70 @@ async function handleChannelBgFileSelect() {
   }
 }
 
+function syncBgStyleInputs() {
+  const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+  if (els.infoBgFit) els.infoBgFit.value = st.fit;
+  if (els.infoBgZoom) els.infoBgZoom.value = String(st.zoom);
+  if (els.infoBgZoomVal) els.infoBgZoomVal.textContent = st.zoom + '%';
+  if (els.infoBgPosX) els.infoBgPosX.value = String(st.posX);
+  if (els.infoBgPosXVal) els.infoBgPosXVal.textContent = st.posX + '%';
+  if (els.infoBgPosY) els.infoBgPosY.value = String(st.posY);
+  if (els.infoBgPosYVal) els.infoBgPosYVal.textContent = st.posY + '%';
+  if (els.infoBgOpacity) els.infoBgOpacity.value = String(st.opacity);
+  if (els.infoBgOpacityVal) els.infoBgOpacityVal.textContent = st.opacity + '%';
+}
+
+function updatePreviewImgStyle() {
+  if (!els.infoBgPreview) return;
+  const img = els.infoBgPreview.querySelector('img');
+  if (!img) return;
+  const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+  applyBgStyleToImg(img, st);
+}
+
 function renderChannelBgPreview(ch) {
   if (!els.infoBgPreview) return;
   els.infoBgPreview.textContent = '';
+  els.infoBgPreview.classList.remove('has-img');
 
   const draft = state.channelBgDraft;
+  const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
+  syncBgStyleInputs();
+
   if (draft && draft.mode === 'upload' && draft.processed) {
     const img = document.createElement('img');
     img.src = draft.processed.dataUrl;
     img.alt = '';
+    applyBgStyleToImg(img, st);
     els.infoBgPreview.appendChild(img);
+    els.infoBgPreview.classList.add('has-img');
     if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = false;
+    if (els.infoBgControls) els.infoBgControls.classList.remove('hidden');
+    if (els.infoBgResetPosBtn) els.infoBgResetPosBtn.classList.remove('hidden');
     return;
   }
 
-  const bg = (!draft || draft.mode !== 'clear') && ch && ch.background ? String(ch.background) : '';
-  if (bg && bg.startsWith('drive:')) {
-    const img = createDriveImageEl(bg.slice(6), {
+  const parsed = (!draft || draft.mode !== 'clear') ? parseChannelBg(ch && ch.background) : { fileId: '' };
+  if (parsed.fileId) {
+    const img = createDriveImageEl(parsed.fileId, {
       token: state.token,
-      size: 400,
+      size: 600,
       className: '',
       alt: '',
     });
+    applyBgStyleToImg(img, st);
     els.infoBgPreview.appendChild(img);
+    els.infoBgPreview.classList.add('has-img');
     if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = false;
+    if (els.infoBgControls) els.infoBgControls.classList.remove('hidden');
+    if (els.infoBgResetPosBtn) els.infoBgResetPosBtn.classList.remove('hidden');
     return;
   }
 
   els.infoBgPreview.textContent = t('bgDefaultLabel');
   if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = true;
+  if (els.infoBgControls) els.infoBgControls.classList.add('hidden');
+  if (els.infoBgResetPosBtn) els.infoBgResetPosBtn.classList.add('hidden');
 }
 
 async function handleSaveChannelSettings(e) {
@@ -2062,6 +2210,7 @@ async function handleSaveChannelSettings(e) {
   if (!memberIds.includes(ch.ownerId)) memberIds.unshift(ch.ownerId);
 
   const draft = state.channelBgDraft;
+  const st = state.channelBgStyleDraft || { posX: 50, posY: 50, zoom: 100, fit: 'cover', opacity: 28 };
   const payload = { channelId: ch.id, name, memberIds };
   if (draft) {
     if (draft.mode === 'clear') {
@@ -2070,7 +2219,11 @@ async function handleSaveChannelSettings(e) {
       payload.bgMode = 'upload';
       payload.bgImageData = draft.processed.base64;
       payload.bgImageMime = draft.processed.mime;
+      payload.bgStyle = st;
     }
+  } else if (state.channelBgStyleChanged && parseChannelBg(ch.background).fileId) {
+    payload.bgMode = 'style';
+    payload.bgStyle = st;
   }
 
   setBtnLoading(els.infoSaveBtn, true, '儲存中…');
@@ -2078,13 +2231,15 @@ async function handleSaveChannelSettings(e) {
   try {
     const res = await apiPost('updateChannel', payload, { token: state.token });
     if (res.channel) {
-      if (draft && draft.mode === 'upload' && res.channel.background && res.channel.background.startsWith('drive:')) {
-        cacheImageDataUrl(res.channel.background.slice(6), draft.processed.dataUrl);
+      const savedBg = parseChannelBg(res.channel.background);
+      if (draft && draft.mode === 'upload' && savedBg.fileId) {
+        cacheImageDataUrl(savedBg.fileId, draft.processed.dataUrl);
       }
       const idx = state.channels.findIndex((c) => c.id === ch.id);
       if (idx >= 0) state.channels[idx] = res.channel;
     }
     state.channelBgDraft = null;
+    state.channelBgStyleChanged = false;
     renderChannelList();
     renderCurrentChannelView();
     closeModal(els.modalChannelInfo);

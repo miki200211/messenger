@@ -893,12 +893,12 @@ button {
 }
 .channel-bg-editor {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
 }
 .channel-bg-preview {
-  width: 108px;
-  height: 64px;
+  width: 100%;
+  height: 140px;
   border-radius: 10px;
   border: 1px dashed var(--border);
   background: var(--bg-app);
@@ -906,22 +906,63 @@ button {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  flex-shrink: 0;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: center;
-  padding: 4px;
+  position: relative;
+  user-select: none;
+  touch-action: none;
+}
+.channel-bg-preview.has-img {
+  border-style: solid;
+  cursor: grab;
+}
+.channel-bg-preview.has-img:active {
+  cursor: grabbing;
 }
 .channel-bg-preview img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  pointer-events: none;
 }
 .channel-bg-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.channel-bg-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-app);
+}
+.channel-bg-controls.hidden {
+  display: none;
+}
+.bg-ctrl-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.bg-ctrl-item > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.bg-ctrl-item strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+.bg-ctrl-item input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
 }
 .date-divider {
   display: flex;
