@@ -4,7 +4,7 @@
  * 格式範例：https://script.google.com/macros/s/AKfycbxxxxxxxxxxxxxxxxxxxx/exec
  */
 export const CONFIG = {
-  GAS_URL: 'https://script.google.com/macros/s/AKfycbw50LVFzhRYFxtOBK_97mcPSDEB9IsbKibuUEAHVYQN26vcA6OTmSGy1HUBahTRtPQW8A/exec',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbydk1Mjfi8ZNB0YXPeWyvyUfU8Dp_Gckb7iLYcZ9YY37huQim9VgeF0TiopTeQZtJq1Ng/exec',
   ACTIVE_POLL_MS: 2500,        // 分頁開啟中輪詢間隔 (ms)
   NOTIFY_HIDDEN_POLL_MS: 7000, // 開啟鈴鐺通知且分頁在背景時的輪詢間隔 (ms)
   HIDDEN_POLL_MS: 20000,       // 未開啟通知且分頁在背景時的輪詢間隔 (ms)
