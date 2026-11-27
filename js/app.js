@@ -222,6 +222,8 @@ const els = {
   joinChannelSubmit: $('join-channel-submit'),
 
   modalChannelInfo: $('modal-channel-info'),
+  infoModalCard: $('info-modal-card'),
+  infoLeftCol: $('info-left-col'),
   channelSettingsForm: $('channel-settings-form'),
   infoChannelTitle: $('info-channel-title'),
   infoNameEditBlock: $('info-name-edit-block'),
@@ -1981,6 +1983,8 @@ function openChannelInfoModal() {
   state.channelBgStyleChanged = false;
 
   if (ch.isOwner) {
+    if (els.infoModalCard) els.infoModalCard.classList.add('is-owner');
+    if (els.infoLeftCol) els.infoLeftCol.classList.remove('hidden');
     els.infoNameEditBlock.classList.remove('hidden');
     els.infoChannelNameInput.value = ch.name;
     els.infoBgEditBlock.classList.remove('hidden');
@@ -1988,6 +1992,8 @@ function openChannelInfoModal() {
     els.infoOwnerFooter.classList.remove('hidden');
     renderChannelBgPreview(ch);
   } else {
+    if (els.infoModalCard) els.infoModalCard.classList.remove('is-owner');
+    if (els.infoLeftCol) els.infoLeftCol.classList.add('hidden');
     els.infoNameEditBlock.classList.add('hidden');
     els.infoBgEditBlock.classList.add('hidden');
     els.infoMembersHint.classList.add('hidden');

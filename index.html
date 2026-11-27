@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=32" />
+  <link rel="stylesheet" href="css/style.css?v=33" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -383,77 +383,83 @@
   <!-- ==================== 彈窗：頻道設定與成員管理 ==================== -->
   <div id="modal-channel-info" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-backdrop"></div>
-    <div class="modal-card">
+    <div id="info-modal-card" class="modal-card modal-card-channel">
       <div class="modal-header">
         <h3 id="info-channel-title">頻道設定</h3>
         <button class="icon-btn modal-close" type="button" aria-label="關閉">✕</button>
       </div>
-      <form id="channel-settings-form" class="modal-body">
-        <!-- 僅建立者可修改頻道名稱 -->
-        <div id="info-name-edit-block" class="field hidden">
-          <label class="field-label" for="info-channel-name-input" data-i18n="labelChannelName">頻道名稱</label>
-          <input id="info-channel-name-input" type="text" maxlength="30" placeholder="輸入頻道名稱" />
-        </div>
-        <!-- 僅建立者可更換聊天室背景圖片 / GIF -->
-        <div id="info-bg-edit-block" class="field hidden">
-          <label class="field-label" data-i18n="labelChannelBg">聊天室背景圖片 / GIF</label>
-          <div class="channel-bg-editor">
-            <div id="info-bg-preview" class="channel-bg-preview"></div>
-            <div class="channel-bg-actions">
-              <button id="info-bg-upload-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnChooseBg">選擇圖片 / GIF</button>
-              <button id="info-bg-clear-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnResetBg">恢復預設</button>
-              <button id="info-bg-reset-pos-btn" class="btn btn-secondary btn-sm hidden" type="button" data-i18n="bgResetPos">重設位置</button>
-              <input id="info-bg-file-input" type="file" accept="image/*" class="hidden" />
+      <form id="channel-settings-form" class="modal-body channel-settings-body">
+        <div id="info-left-col" class="channel-settings-col-left hidden">
+          <!-- 僅建立者可更換聊天室背景圖片 / GIF -->
+          <div id="info-bg-edit-block" class="field hidden" style="margin-bottom: 0;">
+            <label class="field-label" data-i18n="labelChannelBg">聊天室背景圖片 / GIF</label>
+            <div class="channel-bg-editor">
+              <div id="info-bg-preview" class="channel-bg-preview"></div>
+              <div class="channel-bg-actions">
+                <button id="info-bg-upload-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnChooseBg">選擇圖片 / GIF</button>
+                <button id="info-bg-clear-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnResetBg">恢復預設</button>
+                <button id="info-bg-reset-pos-btn" class="btn btn-secondary btn-sm hidden" type="button" data-i18n="bgResetPos">重設位置</button>
+                <input id="info-bg-file-input" type="file" accept="image/*" class="hidden" />
+              </div>
+              <div id="info-bg-controls" class="channel-bg-controls hidden">
+                <p class="hint-text" style="margin: 0 0 4px; grid-column: 1 / -1;" data-i18n="bgDragHint">可直接拖曳預覽圖調整顯示位置</p>
+                <label class="bg-ctrl-item">
+                  <span data-i18n="bgLabelFit">顯示模式</span>
+                  <select id="info-bg-fit" class="settings-select">
+                    <option value="cover" data-i18n="bgFitCover">填滿裁切</option>
+                    <option value="contain" data-i18n="bgFitContain">完整顯示</option>
+                  </select>
+                </label>
+                <label class="bg-ctrl-item">
+                  <span><span data-i18n="bgLabelZoom">縮放裁切</span> <strong id="info-bg-zoom-val">100%</strong></span>
+                  <input id="info-bg-zoom" type="range" min="100" max="250" step="5" value="100" />
+                </label>
+                <label class="bg-ctrl-item">
+                  <span><span data-i18n="bgLabelPosX">左右位置</span> <strong id="info-bg-pos-x-val">50%</strong></span>
+                  <input id="info-bg-pos-x" type="range" min="0" max="100" step="1" value="50" />
+                </label>
+                <label class="bg-ctrl-item">
+                  <span><span data-i18n="bgLabelPosY">上下位置</span> <strong id="info-bg-pos-y-val">50%</strong></span>
+                  <input id="info-bg-pos-y" type="range" min="0" max="100" step="1" value="50" />
+                </label>
+                <label class="bg-ctrl-item" style="grid-column: 1 / -1;">
+                  <span><span data-i18n="bgLabelOpacity">透明度</span> <strong id="info-bg-opacity-val">28%</strong></span>
+                  <input id="info-bg-opacity" type="range" min="10" max="85" step="1" value="28" />
+                </label>
+              </div>
             </div>
-            <div id="info-bg-controls" class="channel-bg-controls hidden">
-              <p class="hint-text" style="margin: 0 0 6px; grid-column: 1 / -1;" data-i18n="bgDragHint">可直接拖曳預覽圖調整顯示位置</p>
-              <label class="bg-ctrl-item">
-                <span data-i18n="bgLabelFit">顯示模式</span>
-                <select id="info-bg-fit" class="settings-select">
-                  <option value="cover" data-i18n="bgFitCover">填滿裁切</option>
-                  <option value="contain" data-i18n="bgFitContain">完整顯示</option>
-                </select>
-              </label>
-              <label class="bg-ctrl-item">
-                <span><span data-i18n="bgLabelZoom">縮放裁切</span> <strong id="info-bg-zoom-val">100%</strong></span>
-                <input id="info-bg-zoom" type="range" min="100" max="250" step="5" value="100" />
-              </label>
-              <label class="bg-ctrl-item">
-                <span><span data-i18n="bgLabelPosX">左右位置</span> <strong id="info-bg-pos-x-val">50%</strong></span>
-                <input id="info-bg-pos-x" type="range" min="0" max="100" step="1" value="50" />
-              </label>
-              <label class="bg-ctrl-item">
-                <span><span data-i18n="bgLabelPosY">上下位置</span> <strong id="info-bg-pos-y-val">50%</strong></span>
-                <input id="info-bg-pos-y" type="range" min="0" max="100" step="1" value="50" />
-              </label>
-              <label class="bg-ctrl-item" style="grid-column: 1 / -1;">
-                <span><span data-i18n="bgLabelOpacity">透明度</span> <strong id="info-bg-opacity-val">28%</strong></span>
-                <input id="info-bg-opacity" type="range" min="10" max="85" step="1" value="28" />
-              </label>
-            </div>
-          </div>
-          <p class="hint-text" style="margin: 6px 0 0;" data-i18n="hintChannelBg">支援 JPG、PNG、WebP 與 GIF 動圖，所有頻道成員都會同步顯示。</p>
-        </div>
-        <div class="info-row">
-          <span class="info-label">建立者</span>
-          <span id="info-channel-owner"></span>
-        </div>
-        <div id="info-invite-row" class="info-row hidden">
-          <span class="info-label">邀請碼</span>
-          <div class="inline-row">
-            <code id="info-invite-code" class="invite-code"></code>
-            <button id="info-copy-invite-btn" class="mini-btn" type="button">複製</button>
+            <p class="hint-text" style="margin: 6px 0 0;" data-i18n="hintChannelBg">支援 JPG、PNG、WebP 與 GIF 動圖，所有頻道成員都會同步顯示。</p>
           </div>
         </div>
-        <div class="info-members-block">
-          <div class="info-label">頻道成員</div>
-          <p id="info-members-hint" class="hint-text hidden">勾選或取消勾選即可新增／移除此頻道的成員</p>
-          <ul id="info-members-list" class="members-list"></ul>
+        <div class="channel-settings-col-right">
+          <!-- 僅建立者可修改頻道名稱 -->
+          <div id="info-name-edit-block" class="field hidden">
+            <label class="field-label" for="info-channel-name-input" data-i18n="labelChannelName">頻道名稱</label>
+            <input id="info-channel-name-input" type="text" maxlength="30" placeholder="輸入頻道名稱" />
+          </div>
+          <div class="info-row">
+            <span class="info-label">建立者</span>
+            <span id="info-channel-owner"></span>
+          </div>
+          <div id="info-invite-row" class="info-row hidden">
+            <span class="info-label">邀請碼</span>
+            <div class="inline-row">
+              <code id="info-invite-code" class="invite-code"></code>
+              <button id="info-copy-invite-btn" class="mini-btn" type="button">複製</button>
+            </div>
+          </div>
+          <div class="info-members-block">
+            <div class="info-label">頻道成員</div>
+            <p id="info-members-hint" class="hint-text hidden">勾選或取消勾選即可新增／移除此頻道的成員</p>
+            <ul id="info-members-list" class="members-list"></ul>
+          </div>
         </div>
-        <p id="info-channel-error" class="form-error hidden" style="margin-top: 10px;"></p>
-        <div id="info-owner-footer" class="modal-footer hidden">
-          <button class="btn btn-secondary modal-close" type="button">取消</button>
-          <button id="info-save-btn" class="btn btn-primary" type="submit">儲存設定</button>
+        <div class="channel-settings-footer-wrap">
+          <p id="info-channel-error" class="form-error hidden" style="margin: 0 0 8px;"></p>
+          <div id="info-owner-footer" class="modal-footer hidden" style="margin-top: 0;">
+            <button class="btn btn-secondary modal-close" type="button" data-i18n="btnCancel">取消</button>
+            <button id="info-save-btn" class="btn btn-primary" type="submit" data-i18n="btnSaveSettings">儲存設定</button>
+          </div>
         </div>
       </form>
     </div>
@@ -630,6 +636,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=32"></script>
+  <script type="module" src="js/app.js?v=33"></script>
 </body>
 </html>
