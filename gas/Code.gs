@@ -71,6 +71,7 @@ const HEADERS = {
     'updated_at',
     'last_sender_id',
     'pinned_notes_json',
+    'background',
   ],
   Messages: [
     'msg_id',
@@ -116,7 +117,7 @@ const ALLOWED_NOTE_COLORS = {
 };
 const MAX_CHANNEL_NOTES = 50;
 
-const SCHEMA_VERSION = 'v7';
+const SCHEMA_VERSION = 'v8';
 let _reqSs = null;
 let _reqImgFolder = null;
 
@@ -659,6 +660,7 @@ function handleCreateChannel_(body) {
       now,
       toSheetText_(auth.user.id),
       '[]',
+      '',
     ]);
 
     cacheChannelMeta_(channelId, {
@@ -802,10 +804,42 @@ function handleUpdateChannel_(body) {
   const channelId = String(body.channelId || '').trim();
   const newName = String(body.name || '').trim();
   const rawMemberIds = Array.isArray(body.memberIds) ? body.memberIds : null;
+  const bgMode = String(body.bgMode || '').trim();
 
   if (!channelId) return { ok: false, error: '缺少頻道 ID' };
   if (newName.length < 1 || newName.length > 30) {
     return { ok: false, error: '頻道名稱需為 1–30 字元' };
+  }
+
+  let uploadedBg = null;
+  if (bgMode === 'upload') {
+    const mime = String(body.bgImageMime || '').trim().toLowerCase();
+    const ext = ALLOWED_IMAGE_MIMES[mime];
+    if (!ext) {
+      return { ok: false, error: '聊天室背景僅支援 WebP、JPG、PNG、GIF 格式' };
+    }
+    let b64 = String(body.bgImageData || '').trim();
+    const commaIdx = b64.indexOf(',');
+    if (commaIdx !== -1 && b64.indexOf('data:') === 0) {
+      b64 = b64.slice(commaIdx + 1);
+    }
+    if (!b64) return { ok: false, error: '背景圖片資料不可為空' };
+    if (b64.length > 4600000) {
+      return { ok: false, error: '背景圖片檔案過大，請控制在 3 MB 以內' };
+    }
+    const bytes = Utilities.base64Decode(b64);
+    const fileName = 'chbg_' + channelId + '_' + randomId_(6) + '.' + ext;
+    const imgFolder = ensureImagesFolder_();
+    const blob = Utilities.newBlob(bytes, mime, fileName);
+    const file = imgFolder.createFile(blob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      // 限制分享時前端會自動透過 getImage 載入
+    }
+    uploadedBg = 'drive:' + file.getId();
+  } else if (bgMode !== '' && bgMode !== 'clear') {
+    return { ok: false, error: '不支援的背景設定方式' };
   }
 
   return withLock_(function () {
@@ -853,11 +887,21 @@ function handleUpdateChannel_(body) {
       return (profiles[uid] && profiles[uid].displayName) ? profiles[uid].displayName : uid;
     });
 
+    let nextBackground = String(row[12] || '');
+    if (bgMode === 'clear') {
+      nextBackground = '';
+    } else if (bgMode === 'upload' && uploadedBg) {
+      nextBackground = uploadedBg;
+    }
+
     const now = nextVersion_('global_ver');
     const rowNum = targetIdx + 2;
     sheet.getRange(rowNum, 2).setValue(toSheetText_(newName));
     sheet.getRange(rowNum, 6, 1, 2).setValues([[JSON.stringify(nextMembers), toSheetText_(nextMemberNames.join(', '))]]);
     sheet.getRange(rowNum, 10).setValue(now);
+    if (bgMode === 'clear' || bgMode === 'upload') {
+      sheet.getRange(rowNum, 13).setValue(toSheetText_(nextBackground));
+    }
 
     cacheChannelMeta_(channelId, { rowNum: rowNum, name: newName, ownerId: ownerId, members: nextMembers });
 
@@ -866,6 +910,7 @@ function handleUpdateChannel_(body) {
     updatedRow[5] = JSON.stringify(nextMembers);
     updatedRow[6] = nextMemberNames.join(', ');
     updatedRow[9] = now;
+    updatedRow[12] = nextBackground;
 
     return {
       ok: true,
@@ -1979,6 +2024,7 @@ function formatChannelRow_(row, viewerUserId) {
     updatedAt: Number(row[9] || 0),
     lastSenderId: String(row[10] || ''),
     pinnedNotes: sanitizePinnedNotes_(safeJsonParse_(String(row[11] || '[]'), [])),
+    background: String(row[12] || ''),
   };
 }
 

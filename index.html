@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Messenger</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%235B5FC7'/><path d='M18 22h28a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H30l-9 7v-7h-3a4 4 0 0 1-4-4V26a4 4 0 0 1 4-4z' fill='white'/></svg>" />
-  <link rel="stylesheet" href="css/style.css?v=30" />
+  <link rel="stylesheet" href="css/style.css?v=31" />
 </head>
 <body>
   <!-- ==================== 登入 / 註冊畫面 ==================== -->
@@ -207,6 +207,9 @@
 
       <!-- 訊息流 -->
       <section id="messages-wrapper" class="messages-wrapper hidden">
+        <div id="chat-bg-layer" class="chat-bg-layer hidden" aria-hidden="true">
+          <img id="chat-bg-img" class="chat-bg-img" alt="" />
+        </div>
         <div id="messages-list" class="messages-list" role="log" aria-live="polite"></div>
         <button id="scroll-bottom-btn" class="scroll-bottom-btn hidden" type="button" data-i18n="btnScrollBottom">↓ 新訊息</button>
       </section>
@@ -388,8 +391,21 @@
       <form id="channel-settings-form" class="modal-body">
         <!-- 僅建立者可修改頻道名稱 -->
         <div id="info-name-edit-block" class="field hidden">
-          <label class="field-label" for="info-channel-name-input">頻道名稱</label>
+          <label class="field-label" for="info-channel-name-input" data-i18n="labelChannelName">頻道名稱</label>
           <input id="info-channel-name-input" type="text" maxlength="30" placeholder="輸入頻道名稱" />
+        </div>
+        <!-- 僅建立者可更換聊天室背景圖片 / GIF -->
+        <div id="info-bg-edit-block" class="field hidden">
+          <label class="field-label" data-i18n="labelChannelBg">聊天室背景圖片 / GIF</label>
+          <div class="channel-bg-editor">
+            <div id="info-bg-preview" class="channel-bg-preview"></div>
+            <div class="channel-bg-actions">
+              <button id="info-bg-upload-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnChooseBg">選擇圖片 / GIF</button>
+              <button id="info-bg-clear-btn" class="btn btn-secondary btn-sm" type="button" data-i18n="btnResetBg">恢復預設</button>
+              <input id="info-bg-file-input" type="file" accept="image/*" class="hidden" />
+            </div>
+          </div>
+          <p class="hint-text" style="margin: 6px 0 0;" data-i18n="hintChannelBg">支援 JPG、PNG、WebP 與 GIF 動圖，所有頻道成員都會同步顯示。</p>
         </div>
         <div class="info-row">
           <span class="info-label">建立者</span>
@@ -587,6 +603,6 @@
   <!-- Toast 通知 -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script type="module" src="js/app.js?v=30"></script>
+  <script type="module" src="js/app.js?v=31"></script>
 </body>
 </html>

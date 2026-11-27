@@ -863,7 +863,26 @@ button {
   display: flex;
   flex-direction: column;
 }
+.chat-bg-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.chat-bg-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.28;
+  display: block;
+}
+[data-theme="dark"] .chat-bg-img {
+  opacity: 0.22;
+}
 .messages-list {
+  position: relative;
+  z-index: 1;
   flex: 1;
   overflow-y: auto;
   padding: 18px 20px 24px;
@@ -871,6 +890,38 @@ button {
   flex-direction: column;
   gap: 6px;
   scroll-behavior: smooth;
+}
+.channel-bg-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.channel-bg-preview {
+  width: 108px;
+  height: 64px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: var(--bg-app);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: center;
+  padding: 4px;
+}
+.channel-bg-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.channel-bg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .date-divider {
   display: flex;

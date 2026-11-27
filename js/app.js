@@ -80,6 +80,7 @@ const state = {
   loginDeviceDraft: '',         // 'mobile' | 'desktop'
   devices: null,                // { mobile: { active, loginAt, isCurrent }, desktop: { ... } }
   avatarDraft: null,            // { mode: 'preset', presetId } | { mode: 'upload', processed }
+  channelBgDraft: null,         // { mode: 'clear' } | { mode: 'upload', processed }
   replyTarget: null,            // { id, senderName, type, preview, fileId }
   editTarget: null,             // { id, type, originalText }
   pendingImage: null,           // { dataUrl, base64, mime, width, height, sizeBytes, name }
@@ -153,6 +154,8 @@ const els = {
   emptyJoinBtn: $('empty-join-btn'),
   dropOverlay: $('drop-overlay'),
   messagesWrapper: $('messages-wrapper'),
+  chatBgLayer: $('chat-bg-layer'),
+  chatBgImg: $('chat-bg-img'),
   messagesList: $('messages-list'),
   scrollBottomBtn: $('scroll-bottom-btn'),
   composerArea: $('composer-area'),
@@ -221,6 +224,11 @@ const els = {
   infoChannelTitle: $('info-channel-title'),
   infoNameEditBlock: $('info-name-edit-block'),
   infoChannelNameInput: $('info-channel-name-input'),
+  infoBgEditBlock: $('info-bg-edit-block'),
+  infoBgPreview: $('info-bg-preview'),
+  infoBgUploadBtn: $('info-bg-upload-btn'),
+  infoBgClearBtn: $('info-bg-clear-btn'),
+  infoBgFileInput: $('info-bg-file-input'),
   infoChannelOwner: $('info-channel-owner'),
   infoInviteRow: $('info-invite-row'),
   infoInviteCode: $('info-invite-code'),
@@ -796,6 +804,17 @@ function bindEvents() {
       }
       if (state.editTarget) cancelEditMode();
       attachImageFile(imgFile);
+    });
+  }
+
+  if (els.infoBgUploadBtn && els.infoBgFileInput) {
+    els.infoBgUploadBtn.addEventListener('click', () => els.infoBgFileInput.click());
+    els.infoBgFileInput.addEventListener('change', handleChannelBgFileSelect);
+  }
+  if (els.infoBgClearBtn) {
+    els.infoBgClearBtn.addEventListener('click', () => {
+      state.channelBgDraft = { mode: 'clear' };
+      renderChannelBgPreview(getCurrentChannel());
     });
   }
 
@@ -1736,7 +1755,37 @@ function renderCurrentChannelView() {
   els.emptyState.classList.add('hidden');
   els.messagesWrapper.classList.remove('hidden');
   els.composerArea.classList.remove('hidden');
+  applyChatBackground(ch);
   renderNotesSidebar();
+}
+
+function applyChatBackground(ch) {
+  if (!els.chatBgLayer) return;
+  const bg = ch && ch.background ? String(ch.background) : '';
+  if (!bg || !bg.startsWith('drive:')) {
+    els.chatBgLayer.classList.add('hidden');
+    delete els.chatBgLayer.dataset.bgId;
+    if (els.chatBgImg) els.chatBgImg.removeAttribute('src');
+    return;
+  }
+
+  const fileId = bg.slice(6);
+  if (els.chatBgLayer.dataset.bgId === fileId && !els.chatBgLayer.classList.contains('hidden')) {
+    return;
+  }
+
+  els.chatBgLayer.dataset.bgId = fileId;
+  const img = createDriveImageEl(fileId, {
+    token: state.token,
+    size: 1600,
+    className: 'chat-bg-img',
+    alt: '',
+  });
+  img.id = 'chat-bg-img';
+  els.chatBgLayer.textContent = '';
+  els.chatBgLayer.appendChild(img);
+  els.chatBgImg = img;
+  els.chatBgLayer.classList.remove('hidden');
 }
 
 async function handleCreateChannel(e) {
@@ -1813,17 +1862,21 @@ function openChannelInfoModal() {
   const ch = getCurrentChannel();
   if (!ch) return;
 
-  els.infoChannelTitle.textContent = ch.isOwner ? '頻道設定' : ('# ' + ch.name);
+  els.infoChannelTitle.textContent = ch.isOwner ? t('modalChannelInfoTitle') : ('# ' + ch.name);
   els.infoChannelOwner.textContent = ch.ownerName || '建立者';
   els.infoChannelError.classList.add('hidden');
+  state.channelBgDraft = null;
 
   if (ch.isOwner) {
     els.infoNameEditBlock.classList.remove('hidden');
     els.infoChannelNameInput.value = ch.name;
+    els.infoBgEditBlock.classList.remove('hidden');
     els.infoMembersHint.classList.remove('hidden');
     els.infoOwnerFooter.classList.remove('hidden');
+    renderChannelBgPreview(ch);
   } else {
     els.infoNameEditBlock.classList.add('hidden');
+    els.infoBgEditBlock.classList.add('hidden');
     els.infoMembersHint.classList.add('hidden');
     els.infoOwnerFooter.classList.add('hidden');
   }
@@ -1947,6 +2000,50 @@ function openChannelInfoModal() {
   openModal(els.modalChannelInfo);
 }
 
+async function handleChannelBgFileSelect() {
+  const file = els.infoBgFileInput.files && els.infoBgFileInput.files[0];
+  els.infoBgFileInput.value = '';
+  if (!file) return;
+  try {
+    const processed = await processImageFile(file);
+    state.channelBgDraft = { mode: 'upload', processed };
+    renderChannelBgPreview(getCurrentChannel());
+  } catch (err) {
+    showToast(err.message || '圖片處理失敗', 'error');
+  }
+}
+
+function renderChannelBgPreview(ch) {
+  if (!els.infoBgPreview) return;
+  els.infoBgPreview.textContent = '';
+
+  const draft = state.channelBgDraft;
+  if (draft && draft.mode === 'upload' && draft.processed) {
+    const img = document.createElement('img');
+    img.src = draft.processed.dataUrl;
+    img.alt = '';
+    els.infoBgPreview.appendChild(img);
+    if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = false;
+    return;
+  }
+
+  const bg = (!draft || draft.mode !== 'clear') && ch && ch.background ? String(ch.background) : '';
+  if (bg && bg.startsWith('drive:')) {
+    const img = createDriveImageEl(bg.slice(6), {
+      token: state.token,
+      size: 400,
+      className: '',
+      alt: '',
+    });
+    els.infoBgPreview.appendChild(img);
+    if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = false;
+    return;
+  }
+
+  els.infoBgPreview.textContent = t('bgDefaultLabel');
+  if (els.infoBgClearBtn) els.infoBgClearBtn.disabled = true;
+}
+
 async function handleSaveChannelSettings(e) {
   e.preventDefault();
   const ch = getCurrentChannel();
@@ -1964,17 +2061,30 @@ async function handleSaveChannelSettings(e) {
   const memberIds = Array.from(checkedBoxes).map((cb) => cb.value);
   if (!memberIds.includes(ch.ownerId)) memberIds.unshift(ch.ownerId);
 
+  const draft = state.channelBgDraft;
+  const payload = { channelId: ch.id, name, memberIds };
+  if (draft) {
+    if (draft.mode === 'clear') {
+      payload.bgMode = 'clear';
+    } else if (draft.mode === 'upload' && draft.processed) {
+      payload.bgMode = 'upload';
+      payload.bgImageData = draft.processed.base64;
+      payload.bgImageMime = draft.processed.mime;
+    }
+  }
+
   setBtnLoading(els.infoSaveBtn, true, '儲存中…');
+  deferNextPoll();
   try {
-    const res = await apiPost(
-      'updateChannel',
-      { channelId: ch.id, name, memberIds },
-      { token: state.token }
-    );
+    const res = await apiPost('updateChannel', payload, { token: state.token });
     if (res.channel) {
+      if (draft && draft.mode === 'upload' && res.channel.background && res.channel.background.startsWith('drive:')) {
+        cacheImageDataUrl(res.channel.background.slice(6), draft.processed.dataUrl);
+      }
       const idx = state.channels.findIndex((c) => c.id === ch.id);
       if (idx >= 0) state.channels[idx] = res.channel;
     }
+    state.channelBgDraft = null;
     renderChannelList();
     renderCurrentChannelView();
     closeModal(els.modalChannelInfo);
